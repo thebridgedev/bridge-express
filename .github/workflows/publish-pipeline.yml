@@ -1,0 +1,26 @@
+name: Release – Build, Test and Publish
+run-name: Build, Test and Publish – ${{ github.ref_name }}
+
+on:
+  push:
+    branches: ["**"]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  pipeline:
+    uses: ./.github/workflows/publish.yml
+    with:
+      working-directory: bridge-express
+      install-command: npm install
+      build-command: npm run build
+      test-command: npm test
+    secrets:
+      npm-token: ${{ secrets.NPM_TOKEN }}
+      docs-sync-key: ${{ secrets.DOCS_SYNC_KEY }}

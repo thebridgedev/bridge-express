@@ -1,0 +1,52 @@
+{
+  "name": "@nebulr-group/bridge-express",
+  "version": "0.1.0-alpha.1",
+  "description": "Bridge authentication and authorization middleware for Express.js",
+  "author": "Nebulr Group",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "jose": "^6.0.10"
+  },
+  "peerDependencies": {
+    "express": "^4.0.0 || ^5.0.0",
+    "@types/express": "^4.0.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.7",
+    "express": "^5.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [
+    "express",
+    "bridge",
+    "nebulr",
+    "auth",
+    "authentication",
+    "jwt",
+    "feature-flags",
+    "rbac",
+    "middleware"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nebulr-group/bridge-express.git"
+  },
+  "homepage": "https://thebridge.dev"
+}

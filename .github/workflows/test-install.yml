@@ -1,0 +1,54 @@
+# Test that the packed package installs cleanly with Express 4 and Express 5
+name: Test install
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  install-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        express-version: ['4', '5']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build and pack package
+        run: |
+          cd bridge-express
+          npm install
+          npm run build
+          npm pack
+          mv nebulr-group-bridge-express-*.tgz ../install-test-pkg.tgz
+
+      - name: Install with Express ${{ matrix.express-version }}
+        run: |
+          mkdir -p install-test
+          cd install-test
+          npm init -y
+          npm install \
+            express@^${{ matrix.express-version }}.0.0 \
+            @types/express@^${{ matrix.express-version }}.0.0
+          npm install ../install-test-pkg.tgz
+          echo "Install with Express ${{ matrix.express-version }} succeeded"
+
+      - name: Verify exports
+        run: |
+          cd install-test
+          node -e "
+            const pkg = require('@nebulr-group/bridge-express');
+            if (!pkg.createBridge) throw new Error('createBridge not exported');
+            if (!pkg.BridgeHttpService) throw new Error('BridgeHttpService not exported');
+            if (!pkg.BridgeHttpError) throw new Error('BridgeHttpError not exported');
+            console.log('All exports OK for Express ${{ matrix.express-version }}');
+          "
