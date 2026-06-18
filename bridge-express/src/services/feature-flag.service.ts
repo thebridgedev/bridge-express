@@ -104,7 +104,7 @@ export class FeatureFlagService {
     }
 
     // Make bulk API call
-    const url = `${this.configService.backendlessBaseUrl}/flags/bulkEvaluate/${this.configService.appId}`;
+    const url = `${this.configService.cloudViewsBaseUrl}/flags/bulkEvaluate/${this.configService.appId}`;
 
     this.configService.log('Bulk evaluating feature flags', { url });
 
@@ -143,7 +143,7 @@ export class FeatureFlagService {
    * Evaluate a single flag via API
    */
   private async evaluateSingleFlag(flag: string, accessToken: string): Promise<boolean> {
-    const url = `${this.configService.backendlessBaseUrl}/flags/evaluate/${this.configService.appId}/${flag}`;
+    const url = `${this.configService.cloudViewsBaseUrl}/flags/evaluate/${this.configService.appId}/${flag}`;
 
     this.configService.log('Evaluating single flag', { flag, url });
 

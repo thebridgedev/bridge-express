@@ -28,6 +28,8 @@ export interface BridgeUser {
   scope?: string;
   /** User's role within the tenant */
   role?: string;
+  /** Privilege strings from the JWT `privileges` claim (e.g. ['AUTHENTICATED', 'USER_READ']) */
+  privileges?: string[];
   /** Whether user has multi-tenant access */
   multiTenantAccess?: boolean;
 }
@@ -74,6 +76,8 @@ export interface JwtClaims {
   tenant_onboarded?: boolean;
   /** User's role */
   role?: string;
+  /** Privilege strings (e.g. ['AUTHENTICATED', 'USER_READ']) */
+  privileges?: string[];
   /** Token issuer */
   iss?: string;
   /** Token audience */
@@ -104,6 +108,7 @@ export function transformJwtToBridgeUser(claims: JwtClaims): BridgeUser {
     appId: claims.aid,
     scope: claims.scope,
     role: claims.role,
+    privileges: claims.privileges,
     multiTenantAccess: claims.multi_tenant,
   };
 }

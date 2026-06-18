@@ -2,7 +2,7 @@ import { FeatureFlagService } from './feature-flag.service';
 import { BridgeConfigService } from './bridge-config.service';
 
 const mockConfigService = {
-  backendlessBaseUrl: 'https://backendless.example.com',
+  cloudViewsBaseUrl: 'https://api.example.com/cloud-views',
   appId: 'test-app',
   log: jest.fn(),
 } as unknown as BridgeConfigService;
@@ -143,6 +143,21 @@ describe('FeatureFlagService', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('network error'));
       const result = await service.bulkEvaluate(TOKEN);
       expect(result.size).toBe(0);
+    });
+
+    it('should POST to the cloud-views bulkEvaluate endpoint for the app', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ flags: [] }),
+      } as any);
+      global.fetch = fetchMock;
+
+      await service.bulkEvaluate(TOKEN);
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://api.example.com/cloud-views/flags/bulkEvaluate/test-app');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ accessToken: TOKEN });
     });
   });
 });

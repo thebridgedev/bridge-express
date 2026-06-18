@@ -1,6 +1,6 @@
 {
   "name": "bridge-express-workspace",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.0",
   "private": true,
   "description": "Bridge Express plugin workspace",
   "workspaces": [
@@ -13,6 +13,17 @@
     "start:demo": "npm run start:dev --workspace=demo",
     "test": "npm run test --workspace=bridge-express",
     "test:install": "bash scripts/test-install.sh",
-    "package": "cd bridge-express && npm pack --pack-destination ../"
+    "package": "cd bridge-express && npm pack --pack-destination ../",
+    "e2e:setup": "ts-node --project tsconfig.e2e.json e2e/pre-setup.ts",
+    "e2e:test": "npm run build && jest --config jest.e2e.config.js"
+  },
+  "devDependencies": {
+    "@types/supertest": "^6.0.0",
+    "dotenv": "^16.0.0",
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.3"
   }
 }

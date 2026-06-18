@@ -7,19 +7,34 @@ export type FeatureFlagRequirement =
   | { all: string[] };
 
 /**
- * Route rule for centralized guard configuration
+ * Privilege levels used to protect routes.
+ * ANONYMOUS  — no authentication required
+ * AUTHENTICATED — any valid JWT (user or API token)
+ * USER_READ / USER_WRITE / TENANT_READ / TENANT_WRITE — specific privilege strings
+ * that must appear in the user JWT's / API token's `privileges` claim.
+ */
+export type RoutePrivilege =
+  | 'ANONYMOUS'
+  | 'AUTHENTICATED'
+  | 'USER_READ'
+  | 'USER_WRITE'
+  | 'TENANT_READ'
+  | 'TENANT_WRITE'
+  | string;
+
+/**
+ * Route rule for centralized guard configuration.
+ * Provide either `path` (REST) or `graphqlOperation` (GraphQL) — or both.
  */
 export interface RouteRule {
-  /** Path pattern to match (supports * wildcard) */
-  path: string;
-  /** Mark route as public (no auth required) */
-  public?: boolean;
-  /** Required role for this route */
-  role?: string;
-  /** Required feature flag(s) for this route */
-  featureFlag?: FeatureFlagRequirement;
-  /** HTTP methods this rule applies to (defaults to all) */
-  methods?: ('GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD')[];
+  /** REST URL wildcard pattern (e.g. "/account/subscription/**") */
+  path?: string;
+  /** GraphQL operation name, case-sensitive camelCase (e.g. "listUsers") */
+  graphqlOperation?: string;
+  /** Required privilege level for this route */
+  privilege: RoutePrivilege;
+  /** Optional plan restriction — tenant plan must be in this list */
+  plans?: string[];
 }
 
 /**
@@ -43,16 +58,10 @@ export interface BridgeConfig {
   appId: string;
 
   /**
-   * The base URL for Bridge auth services
-   * @default 'https://auth.nblocks.cloud'
+   * Base URL for the Bridge API. All endpoints are derived from this.
+   * @default 'https://api.thebridge.dev'
    */
-  authBaseUrl?: string;
-
-  /**
-   * The base URL for Bridge backendless services
-   * @default 'https://backendless.nblocks.cloud'
-   */
-  backendlessBaseUrl?: string;
+  apiBaseUrl?: string;
 
   /**
    * Guard configuration
@@ -64,14 +73,38 @@ export interface BridgeConfig {
    * @default false
    */
   debug?: boolean;
+
+  /**
+   * Override the token-introspection URL for API token verification.
+   * API tokens are signed with the per-app HS256 secret (which this app never
+   * holds), so they are verified by POSTing them to the Bridge rather than
+   * locally. Override this in Docker when the container can't reach the public
+   * apiBaseUrl.
+   * @default {apiBaseUrl}/account/api-token/introspect
+   */
+  introspectionUrl?: string;
+
+  /**
+   * How long (ms) a successful API-token introspection is cached, keyed by
+   * token. Trades revocation latency for fewer network calls. `0` disables
+   * caching → every request introspects (instant revocation).
+   * @default 0
+   */
+  introspectionCacheTtlMs?: number;
+
+  /**
+   * Override the JWKS URL for user JWT verification.
+   * Useful in Docker when the container can't reach the public apiBaseUrl.
+   * @default {apiBaseUrl}/auth/.well-known/jwks.json
+   */
+  userJwksUrl?: string;
 }
 
 /**
  * Default configuration values
  */
 export const BRIDGE_DEFAULTS = {
-  authBaseUrl: 'https://auth.nblocks.cloud',
-  backendlessBaseUrl: 'https://backendless.nblocks.cloud',
+  apiBaseUrl: 'https://api.thebridge.dev',
   debug: false,
   defaultAccess: 'protected' as const,
 } as const;
