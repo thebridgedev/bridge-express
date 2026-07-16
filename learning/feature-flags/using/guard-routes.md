@@ -1,8 +1,8 @@
 # Guard routes
 
 Gating a route on a flag in Express is the `featureFlag` option on
-`bridge.protect(...)`. Because `bridge.protect(...)` is just Express middleware,
-the same option works on a single route or on a whole router.
+`bridge.protect(...)`. Because `bridge.protect(...)` is just Express
+middleware, the same option works on a single route or on a whole router.
 
 ## Gate a single route
 
@@ -15,8 +15,8 @@ router.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req
 });
 ```
 
-A request that doesn't satisfy the flag gets `403 Forbidden` before your handler
-runs — this is real server-side enforcement, not a hidden button:
+A request that doesn't satisfy the flag gets `403 Forbidden` before your
+handler runs. This is real server-side enforcement, not a hidden button:
 
 ```json
 {
@@ -43,11 +43,11 @@ beta.get('/reports', handler);
 app.use('/beta', beta);
 ```
 
-Middleware order works the normal Express way — a route-level
+Middleware order works the normal Express way: a route-level
 `bridge.protect({ featureFlag })` runs in addition to a router-level one, so a
 route can require both.
 
-## Combine multiple flags — any / all
+## Combine multiple flags: any / all
 
 The `featureFlag` option accepts a single key or a requirement object:
 
@@ -74,7 +74,7 @@ is. Each key is evaluated against the same access token.
 
 ## Combine with role and privilege on one route
 
-`featureFlag` composes with the other `bridge.protect(...)` options — they're
+`featureFlag` composes with the other `bridge.protect(...)` options; they're
 all checked in the same middleware. A route can require a role *and* a flag:
 
 ```typescript
@@ -103,5 +103,5 @@ Flag evaluation is satisfied only on a positive result. If the Bridge API is
 unreachable, the requirement is treated as not satisfied and the route returns
 `403`. For a kill-switch-style route where the flag being absent should mean
 "allow", gate the route with a normal privilege/role rule and check the flag
-programmatically inside the handler instead, so you control the fallback — see
+programmatically inside the handler instead, so you control the fallback; see
 [Use flags in your logic](/feature-flags/using/in-logic/).
