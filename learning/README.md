@@ -1,29 +1,29 @@
 # Bridge Express Documentation
 
-Documentation for The Bridge Express plugin — authentication, privilege-based access control, API token support, feature flags, and multi-tenancy for Express applications.
+Documentation for The Bridge Express plugin: authentication, privilege-based access control, API token support, feature flags, and multi-tenancy for Express apps.
 
 ## Quick Links
 
-- [Quickstart Guide](./quickstart/quickstart.md) — Install, configure, and protect routes in minutes
-- [Examples](./examples/examples.md) — Comprehensive examples for all features
+- [Quickstart Guide](./quickstart/quickstart.md): install, configure, and protect routes in minutes
+- [Examples](./examples/examples.md): comprehensive examples for all features
 - [Authentication & Access Control](./auth/auth.md)
 - [Configuration](./configuration/configuration.md)
 - [Feature Flags](./feature-flags/feature-flags.md)
-- [Tenant Data — `bridge.fromJwt()`](./bridge-service/bridge-service.md) — subscription, entitlements, branding for the current request
+- [Tenant Data with `bridge.fromJwt()`](./bridge-service/bridge-service.md): subscription, entitlements, branding for the current request
 - [Multi-Tenancy](./multi-tenancy/multi-tenancy.md)
 - [Frontend Integration](./frontend-integration/frontend-integration.md)
 - [Error Handling](./error-handling/error-handling.md)
 
 ## Features
 
-- Built on `@nebulr-group/bridge-auth-core` — JWT/API-token verification delegated to the shared core
-- A single `createBridge(config)` factory — no decorators, no modules, no dependency injection; you get one `bridge` instance with middleware factories and an HTTP client
+- Built on `@nebulr-group/bridge-auth-core`, with JWT/API-token verification delegated to the shared core
+- A single `createBridge(config)` factory: no decorators, no modules, no dependency injection; you get one `bridge` instance (the object returned by `createBridge`) with middleware factories and an HTTP client
 - JWT authentication with JWKS verification
 - API token authentication (`x-api-key` header) verified via Bridge token introspection, with privilege enforcement
-- Declarative route protection via a `guard` config — privilege-based route rules (`ANONYMOUS`, `AUTHENTICATED`, `USER_READ`, etc.)
-- Per-route protection via `bridge.protect(options)` — role, privilege, feature-flag, and accepted-auth-type overrides
-- Tenant data — `bridge.fromJwt(jwt)` reads subscription, entitlements, branding, and user for the current request
-- Plan-gated routes (subscription-based access)
+- Declarative route protection via a `guard` config: privilege-based route rules (`ANONYMOUS`, `AUTHENTICATED`, `USER_READ`, etc.)
+- Per-route protection via `bridge.protect(options)`: role, privilege, feature-flag, and accepted-auth-type overrides
+- Tenant data: `bridge.fromJwt(jwt)` reads subscription, entitlements, branding, and user for the current request
+- Entitlement checks for subscription-based gating (`tenant.entitlements.can(...)`)
 - Token forwarding between services via `bridge.http`
 - Multi-tenancy support with tenant/user extraction onto the Express `Request`
 - RFC 6750-compliant error responses

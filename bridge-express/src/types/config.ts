@@ -33,8 +33,26 @@ export interface RouteRule {
   graphqlOperation?: string;
   /** Required privilege level for this route */
   privilege: RoutePrivilege;
-  /** Optional plan restriction — tenant plan must be in this list */
+  /**
+   * Optional feature-flag requirement — user JWT must have the flag(s) enabled.
+   * Failure → 403 Forbidden.
+   */
+  featureFlag?: FeatureFlagRequirement;
+  /**
+   * Optional plan restriction — the tenant's subscription plan slug must be in
+   * this list. Failure → 402 Payment Required (reason `plan_required`).
+   */
   plans?: string[];
+  /**
+   * Optional entitlement requirement — the tenant must have this entitlement.
+   * Failure → 402 Payment Required (reason `entitlement_missing`).
+   */
+  entitlement?: string;
+  /**
+   * Optional entitlement requirement — the tenant must have ALL of these
+   * entitlements. Failure → 402 Payment Required (reason `entitlement_missing`).
+   */
+  entitlements?: string[];
 }
 
 /**

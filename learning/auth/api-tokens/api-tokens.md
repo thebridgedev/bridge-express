@@ -7,35 +7,43 @@ sidebar:
 
 # API tokens
 
-Bridge lets your users create API tokens for programmatic access to your API — the same idea as a GitHub or Stripe personal access token — without you having to build token issuance, storage, or revocation yourself. Typical callers: CI/CD pipelines, cron jobs, personal automation scripts, and third-party integrations that need to call your API without a real login session.
+Bridge lets you offer your own users a self-service way to create API tokens for programmatic access to your API: the same idea as a GitHub or Stripe personal access token, without you having to build token issuance, storage, or revocation yourself.
 
 An Express backend is on the *verifying* side of this: a caller sends the token, and `bridge-express` checks it on every request.
 
+## Use cases
+
+- **CI/CD and scripts**: a user wires a token into a pipeline or cron job to call your API unattended.
+- **Personal automation**: a power user scripts against your API for their own workflows (exports, syncs, bulk edits).
+- **Third-party integrations**: a user hands a token to a tool they use (a BI dashboard, a Zapier-style integration) so it can read or write on their behalf without sharing their password.
+
+None of these need a real login session; that's exactly the gap API tokens fill.
+
 ## How it works
 
-- **Sent via `x-api-key`** — as a JWT, alongside or instead of `Authorization: Bearer <userJwt>`.
-- **Verified by introspection, not locally** — API tokens are signed with a per-app HS256 secret this package never holds, so `bridge-express` POSTs the token to Bridge's introspection endpoint (`{apiBaseUrl}/account/api-token/introspect`) rather than checking a signature itself. The Bridge collapses every rejection (forged, tampered, revoked, expired) into `{ active: false }` — no information leak about *why* a token was rejected.
-- **Privilege-scoped** — a token is created with an explicit set of privileges (the same privilege keys your [roles](/auth/roles/how-it-works/) use). It can never do more than what it was granted, and the middleware enforces that server-side (see below).
-- **Workspace-scoped** — a token is bound to the tenant it was created in (`tenantId: null` for an app-level token not bound to any single tenant) and can't be replayed against another one.
-- **Hash-at-rest, shown once** — Bridge stores only a salted hash of the token. Nothing about long-term storage or display is your app's concern.
-- **Revocation is immediate** — because verification is a live introspection call rather than a local signature check, a revoked token gets a `401` on its very next request, no cache to wait out (unless you've opted into `introspectionCacheTtlMs` — see [Configuration](/auth/config/)).
+- **Sent via `x-api-key`**: as a JWT, alongside or instead of `Authorization: Bearer <userJwt>`.
+- **Verified by introspection, not locally**: API tokens are signed with a per-app HS256 secret this package never holds, so `bridge-express` POSTs the token to Bridge's introspection endpoint (`{apiBaseUrl}/account/api-token/introspect`) rather than checking a signature itself. The Bridge collapses every rejection (forged, tampered, revoked, expired) into `{ active: false }`, so there's no information leak about *why* a token was rejected.
+- **Privilege-scoped**: a token is created with an explicit set of privileges (the same privilege keys your [roles](/auth/roles/how-it-works/) use), picked from a searchable list. It can never do more than what it's granted, and the middleware enforces that server-side (see below).
+- **Workspace-scoped**: a token is bound to the workspace it was created in (a workspace is called a *tenant* in the API; `tenantId: null` marks an app-level token not bound to any single workspace) and can't be replayed against another one.
+- **Hash-at-rest, shown once**: Bridge stores only a salted hash. The full token value is shown exactly once, right after creation. Nothing about long-term storage or display is your app's concern.
+- **Revocation**: backend SDKs verify API tokens by asking Bridge (introspection) rather than checking a local signature, and by default they do this on every request, so a revoked token is rejected on its very next call. If your backend enables introspection-result caching (`introspectionCacheTtlMs`, see [Configuration](/auth/config/)), rejection can lag by up to that cache's TTL.
 
 On success, the claims are attached to `req.bridgeApiToken`:
 
 ```typescript
 interface ApiTokenClaims {
   sub: string;               // Token subject identifier
-  appId: string;              // App ID the token was issued for
-  tenantId: string | null;    // Tenant ID (null for app-level tokens)
-  type: 'api';                 // Always 'api' for API tokens
-  privileges: string[];       // Privilege strings (e.g. ['USER_READ', 'TENANT_WRITE'])
-  exp?: number;                // Expiry (epoch seconds)
+  appId: string;             // App ID the token was issued for
+  tenantId: string | null;   // Tenant ID (null for app-level tokens)
+  type: 'api';               // Always 'api' for API tokens
+  privileges: string[];      // Privilege strings (e.g. ['USER_READ', 'TENANT_WRITE'])
+  exp?: number;              // Expiry (epoch seconds)
 }
 ```
 
 ## Requiring a privilege
 
-Pass `privilege` to `bridge.protect(...)` to require that an API token carries a specific privilege. **User JWTs bypass this option entirely** — it only applies to the API-token path, so adding a `privilege` requirement to an endpoint doesn't break existing user-JWT access:
+Pass `privilege` to `bridge.protect(...)` to require that an API token carries a specific privilege. **User JWTs bypass this option entirely.** It only applies to the API-token path, so adding a `privilege` requirement to an endpoint doesn't break existing user-JWT access:
 
 ```typescript
 // API tokens must carry USER_READ; user JWTs are unaffected.
@@ -47,20 +55,20 @@ router.post('/users', bridge.protect({ privilege: 'USER_WRITE' }), handler);
 
 ## Restricting which credential types an endpoint accepts
 
-`acceptAuth` restricts which credential types an endpoint accepts — the type is `'jwt' | 'api_token' | 'both'` (default `'both'`):
+`acceptAuth` restricts which credential types an endpoint accepts. The type is `'jwt' | 'api_token' | 'both'` (default `'both'`):
 
 ```typescript
-// Only user JWTs accepted — an API token alone gets 401
+// Only user JWTs accepted; an API token alone gets 401
 bridge.protect({ acceptAuth: 'jwt' })
 
-// Only API tokens accepted — a user JWT alone gets 401
+// Only API tokens accepted; a user JWT alone gets 401
 bridge.protect({ acceptAuth: 'api_token' })
 
 // Both accepted (default when omitted)
 bridge.protect({ acceptAuth: 'both' })
 ```
 
-> When `acceptAuth: 'jwt'` and **both** headers are present (some Bridge frontends always send both), the request is accepted and the JWT path populates `req.bridgeUser`; the API key is treated as informational only. The endpoint is rejected only if the API token is the *only* credential offered.
+> When `acceptAuth: 'jwt'` and **both** headers are present (some Bridge frontends always send both), the request is accepted and the JWT path populates `req.bridgeUser`; the API key is treated as informational only. The request is rejected only if the API token is the *only* credential offered.
 
 ## Dual-auth endpoints
 
@@ -79,7 +87,7 @@ router.get('/users', bridge.protect({ privilege: 'USER_READ' }), (req, res) => {
 });
 ```
 
-Both credentials can be present and valid on the same request — `req.bridgeApiToken` and `req.bridgeUser` coexist rather than one overriding the other. See [Request authentication states](/auth/user-token/auth-states/) for the full outcome table.
+Both credentials can be present and valid on the same request: `req.bridgeApiToken` and `req.bridgeUser` coexist rather than one overriding the other. See [Request authentication states](/auth/user-token/auth-states/) for the full outcome table.
 
 ## API-token-only endpoints
 
@@ -98,8 +106,12 @@ router.post(
 
 ## Using a token to call another Bridge-aware service
 
-If your Express app itself needs to call a *downstream* service on behalf of the caller (rather than just verifying an inbound token), forward the raw credential with `bridge.http` — see [Getting the user token](/auth/user-token/getting-the-token/#the-raw-access-token-reqbridgeaccesstoken) for the equivalent on the user-JWT path.
+If your Express app itself needs to call a *downstream* service on behalf of the caller (rather than just verifying an inbound token), forward the raw credential with `bridge.http`. See [Getting the user token](/auth/user-token/getting-the-token/#the-raw-access-token-reqbridgeaccesstoken) for the equivalent on the user-JWT path.
+
+## Revoke generously
+
+Revoking a token is irreversible, but tokens are cheap to reissue, and a stale grant is a common way access leaks. When in doubt, revoke and mint a fresh one.
 
 ## Letting your users manage their own tokens
 
-Issuing, listing, and revoking API tokens is a management-plane concern, not something `bridge-express` exposes an API for — that flow lives in a frontend Bridge SDK's drop-in token-management component, or the CLI/Control Center. Your Express app only ever sees the *result*: a token on `x-api-key` that it verifies on each request.
+Issuing, listing, and revoking API tokens is a management-plane concern, not something `bridge-express` exposes an API for. That flow lives in a frontend Bridge SDK's drop-in token-management component, or the CLI / Control Center (your admin dashboard at app.thebridge.dev). Your Express app only ever sees the *result*: a token on `x-api-key` that it verifies on each request.

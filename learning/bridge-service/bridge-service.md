@@ -1,15 +1,15 @@
 # Reading tenant data with `bridge.fromJwt()`
 
-`bridge.fromJwt(userJwt)` gives a request handler one place to read everything Bridge knows about the **current request's tenant**: its subscription, entitlements, branding, and user — without hand-rolling REST calls to the Bridge API.
+`bridge.fromJwt(userJwt)` gives a request handler one place to read everything Bridge knows about the **current request's workspace** (called a *tenant* in the API): its subscription, entitlements, branding, and user, without hand-rolling REST calls to the Bridge API.
 
 Two things to know:
 
-1. **It reads on demand and caches.** Each tenant's data is fetched over REST (`GET /session/init`) and cached briefly. There are no push updates on the server — to react to a change (e.g. a plan upgrade), use Bridge **webhooks**.
-2. **It's per request.** Every request carries a different tenant. You pass the incoming user's JWT and get back a scope bound to *that* user's tenant.
+1. **It reads on demand and caches.** Each workspace's data is fetched over REST (`GET /session/init`) and cached briefly. There are no push updates on the server; to react to a change (e.g. a plan upgrade), use Bridge **webhooks**.
+2. **It's per request.** Every request carries a different workspace. You pass the incoming user's JWT and get back a scope bound to *that* user's workspace.
 
 ## Setup
 
-There's nothing to wire — `fromJwt` is a method on the `bridge` instance you already created with `createBridge(...)`. Just call it inside a handler with the request's access token.
+There's nothing to wire: `fromJwt` is a method on the `bridge` instance you already created with `createBridge(...)`. Just call it inside a handler with the request's access token.
 
 ```typescript
 import { Router } from 'express';
@@ -34,9 +34,9 @@ export default router;
 
 ## `bridge.fromJwt(userJwt)`
 
-`fromJwt` takes the raw user JWT and returns a `TenantScope`. The JWT is forwarded to the Bridge API on the data fetch; the API derives the tenant from the token and returns the matching data. Concurrent calls for the same user are deduped onto a single round-trip.
+`fromJwt` takes the raw user JWT and returns a `TenantScope`. The JWT is forwarded to the Bridge API on the data fetch; the API derives the workspace from the token and returns the matching data. Concurrent calls for the same user are deduped onto a single round-trip.
 
-> `bridge.tenant(tenantId)` — for accessing an arbitrary tenant from cron/admin code — is **not yet available** and throws a clear error if called. Use `bridge.fromJwt(userJwt)` from a request handler.
+> `bridge.tenant(tenantId)`, for accessing an arbitrary workspace from cron/admin code, is **not yet available** and throws a clear error if called. Use `bridge.fromJwt(userJwt)` from a request handler.
 
 ## What you can read
 
@@ -81,7 +81,7 @@ if (await tenant.entitlements.can('seats:10')) { /* ... */ }
 |---|---|
 | `can(key): Promise<boolean>` | Loads the data if needed, then answers. The usual call. |
 | `snapshot(): Promise<Record<string, boolean>>` | The full entitlements map; fetches on first call. |
-| `canSync(key, cached): boolean` | Synchronous check against an already-loaded map — pass the result of a prior `snapshot()`. Use when checking many keys in a hot path. |
+| `canSync(key, cached): boolean` | Synchronous check against an already-loaded map; pass the result of a prior `snapshot()`. Use when checking many keys in a hot path. |
 
 ```typescript
 // Many checks without re-awaiting each time:
@@ -103,7 +103,7 @@ interface BrandingSnapshot {
 }
 ```
 
-Useful for server-rendered emails or PDFs that should carry the tenant's branding.
+Useful for server-rendered emails or PDFs that should carry the workspace's branding.
 
 ### `tenant.user` → `Promise<UserSnapshot>`
 
@@ -118,7 +118,7 @@ interface UserSnapshot {
 
 ### `tenant.invalidate()`
 
-Force the next access to re-fetch — call this right after a change that affects the data (e.g. you just upgraded the plan and want the fresh subscription):
+Force the next access to re-fetch. Call this right after a change that affects the data (e.g. you just upgraded the plan and want the fresh subscription):
 
 ```typescript
 await upgradePlan(tenantId, 'pro');
@@ -128,23 +128,9 @@ const fresh = await tenant.subscription; // re-fetched
 
 ## Gating features by subscription
 
-Reading the subscription and checking entitlements is how you enforce paid features server-side — there is no checkout or paywall in a backend plugin. Purchase and upgrade flows live in your frontend and in the Bridge API (webhooks drive the subscription lifecycle). Two ways to enforce:
+Reading the subscription and checking entitlements is how you enforce paid features server-side; there is no checkout or paywall in a backend plugin. Purchase and upgrade flows live in your frontend and in the Bridge API (webhooks drive the subscription lifecycle).
 
-**Declarative** — gate a route by plan in the central rules (see [Configuration](../configuration/configuration.md)):
-
-```typescript
-const bridge = createBridge({
-  appId,
-  guard: {
-    defaultAccess: 'protected',
-    rules: [
-      { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
-    ],
-  },
-});
-```
-
-**Programmatic** — gate inside a handler with an entitlement check:
+Gate inside a handler with an entitlement check:
 
 ```typescript
 router.get('/features/export', async (req, res) => {
@@ -157,6 +143,8 @@ router.get('/features/export', async (req, res) => {
 });
 ```
 
+> **What about the `plans` field on route rules?** The `RouteRule` type declares a `plans` array, but the middleware does not enforce it yet; a rule's `plans` list is currently ignored. Until that lands, the entitlement check above is the way to gate by subscription server-side. See [Configuration](../configuration/configuration.md).
+
 ## Caching notes
 
 - Default cache lifetime is **~30s**. Concurrent callers for the same user share one in-flight fetch.
@@ -164,6 +152,6 @@ router.get('/features/export', async (req, res) => {
 
 ## See also
 
-- [Configuration](../configuration/configuration.md) — `plans` route rules
-- [Feature Flags](../feature-flags/feature-flags.md) — flag-based gating (distinct from entitlements)
-- [Multi-Tenancy](../multi-tenancy/multi-tenancy.md) — tenant context fundamentals
+- [Configuration](../configuration/configuration.md): the full `RouteRule` reference
+- [Feature Flags](../feature-flags/feature-flags.md): flag-based gating (distinct from entitlements)
+- [Multi-Tenancy](../multi-tenancy/multi-tenancy.md): tenant context fundamentals

@@ -1,91 +1,70 @@
+---
+title: Feature Flags
+order: 40
+oneLiner: Gate a route or branch server-side logic on a flag, flip it live from Control Center, no redeploy.
+related: [auth, payments]
+---
+
 # Feature Flags
 
-Bridge Express gates routes on feature flags evaluated **on demand over the Bridge API**, keyed on the requesting user's access token. A flag check happens during the request, asynchronously, and the result is cached per token so repeated checks within the cache window don't re-hit the network.
+Bridge Feature Flags lets you ship code dark, roll it out to a segment, target
+it at specific users, and kill it instantly, all without a deploy. In Bridge
+Express the switch is enforced **on the server, during the request**:
+`bridge.protect({ featureFlag })` evaluates the flag over the Bridge API
+against the requesting user's access token and returns `403 Forbidden` before
+your handler runs when it isn't enabled. Results are cached per token, so
+repeated checks from the same user within the cache window don't re-hit the
+network.
 
-Feature-flag gating in Express is a route-level concern: you attach it with `bridge.protect({ featureFlag })`. The flag is evaluated against the **user JWT** — it applies to the user-JWT path only, not to API-token callers.
+Flags build on auth: evaluation is keyed on the verified user JWT, so it
+applies to the user-JWT path only (not API-token callers), and everything
+Bridge already knows about the caller is available to target on with no app
+code.
 
-### Gating a route on a single flag
+## The mental model
 
-```typescript
-import { Router } from 'express';
-const router = Router();
+1. **You create a flag in Control Center** (your admin dashboard at
+   app.thebridge.dev) and give it rules: on/off, a rollout, or conditions on
+   attributes like `user.role` or `tenant.plan`.
+2. **Bridge evaluates those rules server-side** against the identity in the
+   caller's verified access token. Nothing to send from your code; the token
+   *is* the identity.
+3. **Changes apply without a deploy.** Edit a rule in Control Center and it
+   governs the next evaluation. No restart, no redeploy; within the per-token
+   cache window a caller may briefly see the previous answer.
 
-router.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req, res) => {
-  res.json({ feature: 'beta-data', user: req.bridgeUser });
-});
+For the full picture (evaluation model, per-token caching, outage behavior),
+read [How flags work](/feature-flags/how-it-works/).
 
-export default router;
-```
+## Get started
 
-If the flag is disabled for the requesting user, the middleware returns `403 Forbidden` before the handler runs:
+[Get started](/feature-flags/get-started/) walks the whole loop in a few
+minutes: create the `bridge` instance, create a flag in Control Center, gate a
+route with `bridge.protect({ featureFlag })`, then flip it and watch the route
+open up.
 
-```json
-{
-  "statusCode": 403,
-  "error": "Forbidden",
-  "message": "Feature flag 'beta-access' is not enabled"
-}
-```
+## Using flags
 
-### Requirement objects — any / all
+- [Use flags in your logic](/feature-flags/using/in-logic/): the
+  `FeatureFlagService` API for branching handler code paths instead of gating
+  the whole route, plus limits an admin can tune.
+- [Guard routes](/feature-flags/using/guard-routes/): gate a single route or a
+  whole router with `bridge.protect({ featureFlag })`, and combine flags with
+  `any` / `all` requirement objects.
+- [Server-side evaluation](/feature-flags/using/backend/): how the backend
+  evaluates, how it agrees with a Bridge frontend, and what to trust.
 
-The `featureFlag` option accepts a single flag key, or a requirement object combining multiple flags:
+## Targeting
 
-```typescript
-// Single flag
-bridge.protect({ featureFlag: 'beta-access' })
+- [Target by plan or role](/feature-flags/targeting/by-plan-or-role/):
+  attributes like `user.role` and `tenant.plan` come from the verified token
+  with no app code. For plan-granted features, prefer entitlement attributes;
+  see [Lock features to a plan](/billing/limits/lock-features/).
+- [Send context from your code](/feature-flags/targeting/send-context/): what
+  the backend supplies automatically, and why it deliberately doesn't forward
+  client-supplied attributes.
 
-// All flags must be enabled
-bridge.protect({ featureFlag: { all: ['premium', 'active-subscription'] } })
-
-// Any flag must be enabled
-bridge.protect({ featureFlag: { any: ['plan-pro', 'plan-enterprise'] } })
-```
-
-The `FeatureFlagRequirement` type:
-
-```typescript
-type FeatureFlagRequirement =
-  | string
-  | { any: string[] }
-  | { all: string[] };
-```
-
-These work with boolean flags.
-
-### Gating a whole router
-
-Because `bridge.protect(...)` is just Express middleware, you can apply a flag requirement to a group of routes:
-
-```typescript
-import { Router } from 'express';
-const beta = Router();
-
-// Every route on this router requires the 'beta-access' flag
-beta.use(bridge.protect({ featureFlag: 'beta-access' }));
-
-beta.get('/dashboard', handler);
-beta.get('/reports', handler);
-
-app.use('/beta', beta);
-```
-
-### Programmatic checks inside a handler
-
-When you need a flag value to branch logic rather than gate the whole route, evaluate it inside the handler. The route still needs auth (so `req.bridgeAccessToken` is populated); branch on the flag from there.
-
-A common pattern is to combine an authenticated route with an entitlement or subscription check via the unified tenant surface (see [Tenant Data](../bridge-service/bridge-service.md)):
-
-```typescript
-router.get('/exports', (req, res) => {
-  // The route is already authenticated by the guard / protect middleware.
-  // Branch on a flag or an entitlement before doing work.
-  // ...
-});
-```
-
-> **How evaluation works.** Flags are evaluated over the Bridge API (`{apiBaseUrl}/cloud-views`) using the user's access token. The result is cached per token, so a route guarded by `bridge.protect({ featureFlag })` does not re-hit the network on every request from the same user within the cache window.
-
-### When the flag is unreachable
-
-Feature-flag evaluation is gated only on a positive result. If the Bridge API is unreachable, the requirement is treated as not satisfied (the route returns 403). For kill-switch-style routes where you want the flag absent to mean "allow", gate the route with a normal privilege rule and check the flag programmatically inside the handler instead, so you control the fallback.
+> **Framework note:** Flags on this path are **boolean**: the middleware gates
+> on enabled / not-enabled. For multi-type variant values (string, number,
+> JSON), roll them out on a Bridge frontend SDK where flags evaluate
+> client-side.

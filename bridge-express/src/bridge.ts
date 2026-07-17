@@ -83,11 +83,17 @@ export function createBridge(config: BridgeConfig): BridgeExpressInstance {
 
   return {
     auth(): RequestHandler {
-      return createAuthMiddleware(configService, jwksService, featureFlagService);
+      return createAuthMiddleware(configService, jwksService, featureFlagService, bridgeService);
     },
 
     protect(options?: BridgeMiddlewareOptions): RequestHandler {
-      return createProtectMiddleware(configService, jwksService, featureFlagService, options);
+      return createProtectMiddleware(
+        configService,
+        jwksService,
+        featureFlagService,
+        bridgeService,
+        options,
+      );
     },
 
     public(): RequestHandler {

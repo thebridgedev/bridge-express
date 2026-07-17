@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-express",
-  "version": "0.1.0-beta.0",
+  "version": "0.1.0-beta.1",
   "description": "Bridge authentication and authorization middleware for Express.js",
   "author": "Nebulr Group",
   "license": "MIT",

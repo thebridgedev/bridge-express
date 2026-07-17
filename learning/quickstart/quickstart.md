@@ -27,11 +27,11 @@ const bridge = createBridge({
 app.listen(3000, () => console.log('Server on http://localhost:3000'));
 ```
 
-There are no modules and no dependency injection — `createBridge(config)` returns a `bridge` instance whose methods (`auth()`, `protect()`, `public()`, `fromJwt()`, `http`) you use directly.
+There are no modules and no dependency injection. `createBridge(config)` returns a `bridge` instance whose methods (`auth()`, `protect()`, `public()`, `fromJwt()`, `http`) you use directly.
 
 ## Global guard with route rules
 
-For most applications, enable the declarative guard with route rules. Mount `bridge.auth()` as application-level middleware. It reads the `guard` config: it protects every route by default (`defaultAccess: 'protected'`) and lets you define exceptions using the `privilege` field:
+For most apps, enable the declarative guard with route rules. Mount `bridge.auth()` as app-level middleware. It reads the `guard` config: it protects every route by default (`defaultAccess: 'protected'`) and lets you define exceptions using the `privilege` field:
 
 ```typescript
 // src/app.ts
@@ -54,9 +54,6 @@ const bridge = createBridge({
       // Require specific privileges
       { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
       { path: '/users/*', privilege: 'USER_READ' },
-
-      // Restrict by subscription plan
-      { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
     ],
   },
 });
@@ -69,7 +66,7 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 All routes are now protected by default, with the exceptions you defined.
 
-> **Note:** Role-based access (`bridge.protect({ role })`) and feature-flag gating (`bridge.protect({ featureFlag })`) are applied per route with `bridge.protect(...)`, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details.
+> **Note:** Role-based access (`bridge.protect({ role })`) and feature-flag gating (`bridge.protect({ featureFlag })`) are applied per route with `bridge.protect(...)`, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details. The `RouteRule` type also declares a `plans` field, but it is not yet enforced by the middleware; for plan-based gating that actually blocks requests, use entitlement checks (see [Tenant Data](../bridge-service/bridge-service.md)).
 
 ## Accessing the authenticated user
 
@@ -94,9 +91,9 @@ export default router;
 
 `req.bridgeUser` is typed as `BridgeUser`. Bridge Express augments the Express `Request` type, so `req.bridgeUser`, `req.bridgeTenant`, `req.bridgeAccessToken`, and `req.bridgeApiToken` are all available without extra typing.
 
-## Accessing tenant information
+## Accessing workspace information
 
-The tenant the user is authenticated for is on `req.bridgeTenant`:
+The workspace the user is authenticated for (a workspace is called a *tenant* in the API, hence the identifier names below) is on `req.bridgeTenant`:
 
 ```typescript
 router.get('/workspace', (req, res) => {
@@ -120,11 +117,11 @@ app.get('/health', bridge.public(), (_req, res) => {
 });
 ```
 
-Either approach works — a `{ path: '/health', privilege: 'ANONYMOUS' }` rule in config, or `bridge.public()` on the route itself. Use `bridge.public()` when you want the decision to live next to the handler.
+Either approach works: a `{ path: '/health', privilege: 'ANONYMOUS' }` rule in config, or `bridge.public()` on the route itself. Use `bridge.public()` when you want the decision to live next to the handler.
 
 ## API token authentication
 
-The plugin supports API token authentication alongside user JWTs. API tokens are sent via the `x-api-key` header and carry their own privilege claims. They are verified by Bridge token introspection — your app never holds the signing secret.
+The plugin supports API token authentication alongside user JWTs. API tokens are sent via the `x-api-key` header and carry their own privilege claims. They are verified by Bridge token introspection; your app never holds the signing secret.
 
 Use `bridge.protect({ privilege })` to require an API token privilege, and `acceptAuth` to restrict which credential types an endpoint accepts:
 
@@ -137,7 +134,7 @@ router.get('/api/users', bridge.protect({ privilege: 'USER_READ' }), (req, res) 
   res.json({ users: [] });
 });
 
-// Only accept API tokens — a user JWT alone gets 401.
+// Only accept API tokens; a user JWT alone gets 401.
 router.post(
   '/integrations/sync',
   bridge.protect({ acceptAuth: 'api_token', privilege: 'TENANT_WRITE' }),
@@ -155,8 +152,8 @@ You now have backend authentication set up. The middleware will:
 
 1. Validate user JWTs from `Authorization: Bearer <token>` headers (verified against Bridge's JWKS endpoint)
 2. Validate API tokens from `x-api-key` headers (verified via Bridge token introspection)
-3. Attach user and tenant information to each request (`req.bridgeUser`, `req.bridgeTenant`, `req.bridgeApiToken`)
+3. Attach user and workspace information to each request (`req.bridgeUser`, `req.bridgeTenant`, `req.bridgeApiToken`)
 4. Enforce privilege, role, and feature flag requirements
-5. Return RFC 6750-compliant 401/403 responses on failure
+5. Return RFC 6750-compliant 401 responses (with `WWW-Authenticate` headers) and JSON 403 responses on failure
 
 For detailed examples including role-based access, feature flags, API token patterns, and multi-tenancy, see the [examples documentation](../examples/examples.md).

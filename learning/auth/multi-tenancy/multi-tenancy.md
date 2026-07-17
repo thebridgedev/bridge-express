@@ -7,19 +7,19 @@ sidebar:
 
 # Multi-tenancy
 
-Bridge has first-class multi-tenant architecture: a user can belong to more than one **tenant** (also called a **workspace** — Bridge and these docs use both words for the same thing). The same login credentials get a user into every tenant they belong to, but everything tenant-scoped is configured *separately* per tenant — role, plan, entitlements, quotas, and branding can all differ. The same person can be `ADMIN` in one workspace and `OWNER` in another, signing in with the exact same email and password either way.
+Bridge has first-class multi-tenant architecture: a user can belong to more than one workspace (called a *tenant* in the API; these docs use *workspace* in prose and keep `tenant` in identifiers). The same credentials let a user sign in to every workspace they belong to, but everything workspace-scoped is configured *separately* per workspace: role, plan, entitlements, quotas, and branding can all differ. The same person can be `ADMIN` in one workspace and `OWNER` in another, signing in with the exact same email and password either way.
 
-Every authenticated request carries exactly one tenant context: the verified tenant is on `req.bridgeUser.tenantId` and `req.bridgeTenant` (see [Getting the user token](/auth/user-token/getting-the-token/)). `req.bridgeUser.role` always reflects that person's role in whichever tenant issued the current token — a request from the same user acting in a different tenant carries a different token, with a different role.
+Every authenticated request carries exactly one workspace context: the verified workspace is on `req.bridgeUser.tenantId` and `req.bridgeTenant` (see [Getting the user token](/auth/user-token/getting-the-token/)). `req.bridgeUser.role` always reflects that person's role in whichever workspace issued the current token; a request from the same user acting in a different workspace carries a different token, with a different role.
 
-## Where the active tenant comes from
+## Where the active workspace comes from
 
-Picking *which* tenant a session is for is a frontend/login-flow concern, not something your Express app decides — by the time a request reaches your backend, that choice has already been made and baked into the token. The trigger for that choice, for context: a user is only prompted to pick between tenants when they have more than one **enabled** membership in an **active** tenant. A disabled membership, or a tenant that isn't active (suspended for non-payment, for example), doesn't count — even though the underlying tenant-user record still exists. Your Express app never needs to re-derive this; it only ever sees the one tenant the already-completed login flow selected, on `req.bridgeUser.tenantId`.
+Picking *which* workspace a session is for is a frontend/sign-in-flow concern, not something your Express app decides. By the time a request reaches your backend, that choice has already been made and baked into the token. The trigger for that choice, for context: a user is only prompted to pick between workspaces when they have more than one **enabled** membership in an **active** workspace. A disabled membership, or a workspace that isn't active (suspended for non-payment, for example), doesn't count, even though the underlying tenant-user record still exists. Your Express app never needs to re-derive this; it only ever sees the one workspace the already-completed sign-in flow selected, on `req.bridgeUser.tenantId`.
 
-## Isolation is enforced server-side — that's you
+## Isolation is enforced server-side, and that's you
 
 This is the part your Express app is directly responsible for. Tenant isolation isn't a client-side property; it's whatever your route handlers actually do with `req.bridgeUser.tenantId`.
 
-**Never trust the client to provide the tenant ID** — always read it from the authenticated user's token, never from the request body or query string:
+**Never trust the client to provide the tenant ID.** Always read it from the authenticated user's token, never from the request body or query string:
 
 ```typescript
 router.post('/items', bridge.protect(), async (req, res) => {
@@ -31,7 +31,7 @@ router.post('/items', bridge.protect(), async (req, res) => {
 
 router.get('/items/:id', bridge.protect(), async (req, res) => {
   const user = req.bridgeUser!;
-  // Scoped to the user's tenant — can't reach another tenant's data
+  // Scoped to the user's tenant: can't reach another tenant's data
   const item = await items.findOne(req.params.id, user.tenantId);
   if (!item) {
     res.status(404).json({ error: 'Not Found', message: 'Item not found' });
@@ -41,7 +41,7 @@ router.get('/items/:id', bridge.protect(), async (req, res) => {
 });
 ```
 
-For API-token callers, the equivalent field is `req.bridgeApiToken.tenantId` — `null` for app-level tokens not bound to a single tenant (see [API tokens](/auth/api-tokens/)).
+For API-token callers, the equivalent field is `req.bridgeApiToken.tenantId`, which is `null` for app-level tokens not bound to a single workspace (see [API tokens](/auth/api-tokens/)).
 
 ### Data separation strategies
 
@@ -50,7 +50,7 @@ For API-token callers, the equivalent field is `req.bridgeApiToken.tenantId` —
 Add a `tenantId` column to your tables and filter every query by it:
 
 ```typescript
-// Pseudocode model — use your ORM/driver of choice (Prisma, Knex, TypeORM, raw SQL).
+// Pseudocode model: use your ORM/driver of choice (Prisma, Knex, TypeORM, raw SQL).
 interface Item {
   id: string;
   tenantId: string;   // every row belongs to exactly one tenant
@@ -59,9 +59,9 @@ interface Item {
 }
 ```
 
-**2. Schema-based separation** — separate database schema per tenant (more isolation, more complexity).
+**2. Schema-based separation**: separate database schema per workspace (more isolation, more complexity).
 
-**3. Database-based separation** — completely separate databases per tenant (maximum isolation, highest complexity).
+**3. Database-based separation**: completely separate databases per workspace (maximum isolation, highest complexity).
 
 ## Just-in-Time (JIT) provisioning
 
@@ -84,7 +84,7 @@ async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenan
 }
 ```
 
-Call it from a small middleware using the verified tenant from the token:
+Call it from a small middleware using the verified tenant ID from the token:
 
 ```typescript
 router.use(async (req, _res, next) => {
@@ -98,13 +98,13 @@ router.use(async (req, _res, next) => {
 
 ## Webhook-based provisioning
 
-Bridge sends webhooks when tenants and users are created:
+Bridge sends webhooks when workspaces and users are created:
 
-- `TENANT_CREATED` — new workspace/account created
-- `TENANT_UPDATED` — workspace details changed
-- `TENANT_USER_CREATED` — new user added to workspace
-- `TENANT_USER_UPDATED` — user details changed
-- `TENANT_USER_DELETED` — user removed from workspace
+- `TENANT_CREATED`: new workspace/account created
+- `TENANT_UPDATED`: workspace details changed
+- `TENANT_USER_CREATED`: new user added to a workspace
+- `TENANT_USER_UPDATED`: user details changed
+- `TENANT_USER_DELETED`: user removed from a workspace
 
 Handle them on a **public** route (webhooks carry no user JWT):
 
@@ -138,10 +138,10 @@ export default router;
 
 ## Recommended pattern: webhooks + JIT fallback
 
-The most robust approach combines both methods — webhooks as the primary provisioning path, JIT as a fallback if a request beats the webhook:
+The most robust approach combines both methods: webhooks as the primary provisioning path, JIT as a fallback if a request beats the webhook:
 
 ```typescript
-// Called from the webhook — primary provisioning path
+// Called from the webhook: primary provisioning path
 async function createTenant(data: { id: string; name: string; plan?: string }): Promise<Tenant> {
   const existing = await db.tenants.findById(data.id);
   if (existing) return existing; // JIT already handled it
@@ -155,7 +155,7 @@ async function createTenant(data: { id: string; name: string; plan?: string }): 
   return tenant;
 }
 
-// Called on each request — JIT fallback
+// Called on each request: JIT fallback
 async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenant> {
   let tenant = await db.tenants.findById(tenantId);
   if (!tenant) {
@@ -171,6 +171,6 @@ async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenan
 }
 ```
 
-## Tenant-scoped data beyond the JWT
+## Workspace-scoped data beyond the JWT
 
-For subscription plan, entitlements, and branding — none of which are in the JWT — use `bridge.fromJwt(req.bridgeAccessToken!)` rather than hand-rolling REST calls. See [Tenant Data](../bridge-service/bridge-service.md) for the full reference and [How the token is kept current](/auth/user-token/object-updates/) for its caching behavior.
+For subscription plan, entitlements, and branding (none of which are in the JWT), use `bridge.fromJwt(req.bridgeAccessToken!)` rather than hand-rolling REST calls. See [Tenant Data](../../bridge-service/bridge-service.md) for the full reference and [How the token is kept current](/auth/user-token/object-updates/) for its caching behavior.

@@ -7,21 +7,24 @@ sidebar:
 
 # The owner role
 
-Every tenant has an `OWNER` role, and Bridge enforces some rules around it that you'll want to know before you hit them:
+Every workspace (called a *tenant* in the API) has an `OWNER` role, and Bridge enforces some rules around it that you'll want to know before you hit them:
 
-- **Every tenant must have at least one owner.** Whoever creates a tenant becomes its first `OWNER` automatically.
-- **You can't demote the last owner.** Changing a user's role away from `OWNER` is blocked if they're the only owner left in the tenant — the API rejects it with "There must be at least one owner for this workspace." Promote someone else to `OWNER` first, then demote the original one.
+- **Every workspace must have at least one owner.** Whoever creates a workspace becomes its first `OWNER` automatically.
+- **You can't demote the last owner.** Changing a user's role away from `OWNER` is blocked if they're the only owner left in the workspace; the API rejects it with "There must be at least one owner for this workspace." Promote someone else to `OWNER` first, then demote the original one.
 - **The `OWNER` role itself can't be deleted, and its key can't be changed to something else.** You can still edit its name, description, or (carefully) its privilege set.
 
-`OWNER` is granted the broadest default privilege set (`AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`) — treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually. If you gate a route with `bridge.protect({ role: 'OWNER' })`, expect it to match a small set of users per tenant.
+`OWNER` is granted the broadest default privilege set (`AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`). Treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually. If you gate a route with `bridge.protect({ role: 'OWNER' })`, expect it to match a small set of users per workspace.
 
 ## What this means in practice
 
-Role assignment itself is a management-plane call, not something `bridge-express` wraps (see [Assign roles to users](/auth/roles/assign-roles/)) — but if your Express app fronts an admin API that proxies role changes to Bridge on a caller's behalf, forward the caller's verified token rather than re-deriving credentials, and surface the "last owner" rejection as a clear error to your own client instead of a generic 500:
+Role assignment itself is a management-plane call, not something `bridge-express` wraps (see [Assign roles to users](/auth/roles/assign-roles/)). But if your Express app fronts an admin API that proxies role changes to Bridge on a caller's behalf, forward the caller's verified token rather than re-deriving credentials, and surface the "last owner" rejection as a clear error to your own client instead of a generic 500:
 
 ```typescript
+import { BridgeHttpError } from '@nebulr-group/bridge-express';
+
 router.post('/admin/users/:id/role', bridge.protect({ role: 'OWNER' }), async (req, res) => {
   try {
+    // Illustrative downstream call: substitute the Bridge endpoint your proxy targets.
     await bridge.http.post(
       `${bridgeApiBaseUrl}/team/users/${req.params.id}`,
       { role: req.body.role },
@@ -39,4 +42,4 @@ router.post('/admin/users/:id/role', bridge.protect({ role: 'OWNER' }), async (r
 });
 ```
 
-`BridgeHttpError` is Bridge Express's error type for non-2xx responses from `bridge.http` — see [Configuration](/auth/config/) and the error-handling reference for its shape.
+`BridgeHttpError` is Bridge Express's error type for non-2xx responses from `bridge.http`; see the [error-handling reference](../../error-handling/error-handling.md#bridgehttperror) for its shape.
