@@ -1,9 +1,9 @@
-# Multi-Tenancy Patterns
+# Multi-tenancy patterns
 
 > Looking for the current tenant's subscription, entitlements, or branding inside a request? See
-> [Tenant Data — `bridge.fromJwt()`](../bridge-service/bridge-service.md).
+> [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md).
 
-Every authenticated request carries a tenant. The verified tenant ID is available as `req.bridgeUser.tenantId` (and `req.bridgeTenant.id`). The patterns below cover how to keep each tenant's data separate and how to provision tenant records in your own database.
+Every authenticated request carries a workspace (called a *tenant* in the API). The verified tenant ID is available as `req.bridgeUser.tenantId` (and `req.bridgeTenant.id`). The patterns below cover how to keep each tenant's data separate and how to provision tenant records in your own database.
 
 ### Data separation strategies
 
@@ -12,7 +12,7 @@ Every authenticated request carries a tenant. The verified tenant ID is availabl
 Add a `tenantId` column to your tables and filter every query by it:
 
 ```typescript
-// Pseudocode model — use your ORM/driver of choice (Prisma, Knex, TypeORM, raw SQL).
+// Pseudocode model: use your ORM/driver of choice (Prisma, Knex, TypeORM, raw SQL).
 interface Item {
   id: string;
   tenantId: string;   // every row belongs to exactly one tenant
@@ -21,9 +21,9 @@ interface Item {
 }
 ```
 
-**2. Schema-based separation** — separate database schema per tenant (more isolation, more complexity).
+**2. Schema-based separation**: a separate database schema per tenant (more isolation, more complexity).
 
-**3. Database-based separation** — completely separate databases per tenant (maximum isolation, highest complexity).
+**3. Database-based separation**: completely separate databases per tenant (maximum isolation, highest complexity).
 
 ### Just-in-Time (JIT) provisioning
 
@@ -62,11 +62,11 @@ router.use(async (req, _res, next) => {
 
 Bridge sends webhooks when tenants and users are created:
 
-- `TENANT_CREATED` — new workspace/account created
-- `TENANT_UPDATED` — workspace details changed
-- `TENANT_USER_CREATED` — new user added to workspace
-- `TENANT_USER_UPDATED` — user details changed
-- `TENANT_USER_DELETED` — user removed from workspace
+- `TENANT_CREATED`: new workspace created
+- `TENANT_UPDATED`: workspace details changed
+- `TENANT_USER_CREATED`: new user added to a workspace
+- `TENANT_USER_UPDATED`: user details changed
+- `TENANT_USER_DELETED`: user removed from a workspace
 
 Handle them on a **public** route (webhooks carry no user JWT):
 
@@ -114,10 +114,10 @@ const bridge = createBridge({
 
 ### Recommended pattern: Webhooks + JIT fallback
 
-The most robust approach combines both methods — webhooks as the primary provisioning path, JIT as a fallback if a request beats the webhook:
+The most robust approach combines both methods: webhooks as the primary provisioning path, with JIT as a fallback if a request beats the webhook.
 
 ```typescript
-// Called from the webhook — primary provisioning path
+// Called from the webhook (primary provisioning path)
 async function createTenant(data: { id: string; name: string; plan?: string }): Promise<Tenant> {
   const existing = await db.tenants.findById(data.id);
   if (existing) return existing; // JIT already handled it
@@ -131,7 +131,7 @@ async function createTenant(data: { id: string; name: string; plan?: string }): 
   return tenant;
 }
 
-// Called on each request — JIT fallback
+// Called on each request (JIT fallback)
 async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenant> {
   let tenant = await db.tenants.findById(tenantId);
   if (!tenant) {
@@ -149,7 +149,7 @@ async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenan
 
 ### Scoping queries by tenant
 
-Always scope database queries by tenant to ensure data isolation. **Never trust the client to provide the tenant ID** — always read it from the authenticated user's token (`req.bridgeUser.tenantId`), never from the request body or query string:
+Always scope database queries by tenant to ensure data isolation. **Never trust the client to provide the tenant ID**: always read it from the authenticated user's token (`req.bridgeUser.tenantId`), never from the request body or query string:
 
 ```typescript
 router.post('/items', async (req, res) => {
@@ -161,7 +161,7 @@ router.post('/items', async (req, res) => {
 
 router.get('/items/:id', async (req, res) => {
   const user = req.bridgeUser!;
-  // Scoped to the user's tenant — can't reach another tenant's data
+  // Scoped to the user's tenant, so it can't reach another tenant's data
   const item = await items.findOne(req.params.id, user.tenantId);
   if (!item) {
     res.status(404).json({ error: 'Not Found', message: 'Item not found' });

@@ -46,9 +46,9 @@ Everything is derived from `apiBaseUrl` (default `https://api.thebridge.dev`):
 | Purpose | Derived URL | Override |
 |---|---|---|
 | User JWT verification (JWKS) | `{apiBaseUrl}/auth/.well-known/jwks.json` | `userJwksUrl` |
-| Feature flag evaluation | `{apiBaseUrl}/cloud-views` | — |
+| Feature flag evaluation | `{apiBaseUrl}/cloud-views` | (none) |
 | API token introspection | `{apiBaseUrl}/account/api-token/introspect` | `introspectionUrl` |
-| Unified tenant surface | `{apiBaseUrl}/session/init` | — |
+| Unified tenant surface | `{apiBaseUrl}/session/init` | (none) |
 
 In most deployments you set only `appId` (and optionally `apiBaseUrl`). The `introspectionUrl` and `userJwksUrl` overrides exist for environments where the process reaches the Bridge over a private network address that differs from the public `apiBaseUrl`.
 
@@ -70,7 +70,7 @@ const bridge = createBridge({
 
 ### Configuration from environment variables
 
-There's no async-factory ceremony — read environment variables directly when you build the config:
+There's no async-factory ceremony. Read environment variables directly when you build the config:
 
 ```typescript
 import 'dotenv/config';
@@ -91,7 +91,7 @@ const bridge = createBridge({
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BRIDGE_APP_ID` | Your Bridge application ID | (required) |
+| `BRIDGE_APP_ID` | Your Bridge app ID | (required) |
 | `BRIDGE_API_BASE_URL` | Bridge API base URL | `https://api.thebridge.dev` |
 | `BRIDGE_DEBUG` | Enable debug logging | `false` |
 
@@ -112,18 +112,20 @@ interface RouteRule {
   path?: string;
 
   /** GraphQL operation name, case-sensitive camelCase (e.g. "listUsers").
-   *  Reserved — NOT wired in the Express plugin. */
+   *  Reserved; NOT wired in the Express plugin. */
   graphqlOperation?: string;
 
   /** Required privilege level for this route */
   privilege: RoutePrivilege;
 
-  /** Optional plan restriction — tenant plan must be in this list */
+  /** Optional plan restriction; declared but NOT enforced yet (see below) */
   plans?: string[];
 }
 ```
 
 > **GraphQL operation rules are not wired in Express.** The `graphqlOperation` field exists in the type for cross-framework parity, but the Express plugin matches REST `path` patterns only. To protect a GraphQL endpoint, attach `bridge.protect(...)` to the `/graphql` route.
+
+> **`plans` is not enforced yet.** The field is declared on the type, but the middleware currently ignores it; a rule with `plans` does not restrict access by subscription plan. For plan-based gating that actually blocks requests, use entitlement checks via `bridge.fromJwt(...)`; see [Tenant Data](../bridge-service/bridge-service.md).
 
 Path patterns support the `*` wildcard, which matches any characters (including `/`). For example `/reports/*` matches `/reports/summary` and `/reports/2024/q1`.
 
@@ -145,9 +147,6 @@ const bridge = createBridge({
       // Require a specific privilege in the user JWT
       { path: '/users/*', privilege: 'USER_READ' },
       { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-
-      // Restrict by subscription plan
-      { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
     ],
   },
 });
@@ -180,7 +179,7 @@ interface GuardConfig {
 }
 ```
 
-Unlike a module-based framework, there is no `global` flag — the guard becomes "global" simply by mounting `bridge.auth()` with `app.use(...)`. Mount it on a sub-router to scope the declarative rules to a subtree of routes.
+Unlike a module-based framework, there is no `global` flag; the guard becomes "global" simply by mounting `bridge.auth()` with `app.use(...)`. Mount it on a sub-router to scope the declarative rules to a subtree of routes.
 
 ### Defaults
 

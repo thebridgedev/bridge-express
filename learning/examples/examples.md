@@ -2,13 +2,13 @@
 
 End-to-end, copy-pasteable examples for the Bridge Express plugin. Every snippet is valid against the current API. For conceptual depth, follow the links to the topic guides.
 
-- [Authentication & Access Control](../auth/auth.md)
+- [Authentication and access control](../auth/auth.md)
 - [Configuration](../configuration/configuration.md)
-- [Feature Flags](../feature-flags/feature-flags.md)
-- [Tenant Data — `bridge.fromJwt()`](../bridge-service/bridge-service.md)
-- [Multi-Tenancy](../multi-tenancy/multi-tenancy.md)
-- [Frontend Integration](../frontend-integration/frontend-integration.md)
-- [Error Handling](../error-handling/error-handling.md)
+- [Feature flags](../feature-flags/feature-flags.md)
+- [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md)
+- [Multi-tenancy](../multi-tenancy/multi-tenancy.md)
+- [Frontend integration](../frontend-integration/frontend-integration.md)
+- [Error handling](../error-handling/error-handling.md)
 
 ## Installation
 
@@ -37,12 +37,12 @@ const bridge = createBridge({
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/webhooks/*', privilege: 'ANONYMOUS' },
       { path: '/account/users', privilege: 'USER_READ' },
-      { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
+      { path: '/reports/*', privilege: 'TENANT_READ' },
     ],
   },
 });
 
-// Mount the guard — every route below it is governed by the rules above.
+// Mount the guard. Every route below it is governed by the rules above.
 app.use(bridge.auth());
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
@@ -121,7 +121,7 @@ app.get('/health', bridge.public(), (_req, res) => {
 ## 6. Feature flags
 
 ```typescript
-// Single flag — 403 when disabled for the requesting user
+// Single flag: 403 when disabled for the requesting user
 app.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req, res) => {
   res.json({ feature: 'beta-data', user: req.bridgeUser });
 });
@@ -137,9 +137,9 @@ app.get('/pro', bridge.protect({ featureFlag: { any: ['plan-pro', 'plan-enterpri
 });
 ```
 
-See [Feature Flags](../feature-flags/feature-flags.md) for details.
+See [Feature flags](../feature-flags/feature-flags.md) for details.
 
-## 7. Tenant data — subscription & entitlement gating
+## 7. Tenant data: subscription and entitlement gating
 
 ```typescript
 app.get('/reports/export', async (req, res) => {
@@ -155,7 +155,7 @@ app.get('/reports/export', async (req, res) => {
 });
 ```
 
-See [Tenant Data — `bridge.fromJwt()`](../bridge-service/bridge-service.md) for the full reference.
+See [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md) for the full reference.
 
 ## 8. Token forwarding between services
 
@@ -207,7 +207,7 @@ router.post('/webhooks/bridge', bridge.public(), async (req, res) => {
 app.use(router);
 ```
 
-See [Multi-Tenancy](../multi-tenancy/multi-tenancy.md) for the full provisioning patterns.
+See [Multi-tenancy](../multi-tenancy/multi-tenancy.md) for the full provisioning patterns.
 
 ## 10. RFC 6750 error responses
 
@@ -230,4 +230,4 @@ WWW-Authenticate: Bearer error="invalid_token", error_description="The access to
 403 Forbidden
 ```
 
-See [Error Handling](../error-handling/error-handling.md) for the full response shapes.
+See [Error handling](../error-handling/error-handling.md) for the full response shapes.

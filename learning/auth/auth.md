@@ -4,8 +4,8 @@
 
 Bridge Express evaluates two independent authentication paths on every request:
 
-1. **User JWT** — sent via `Authorization: Bearer <token>`. Verified against Bridge's JWKS endpoint. The standard path for browser-based users.
-2. **API token** — sent via `x-api-key` as a JWT. Verified via Bridge token introspection (the app never holds the signing secret). The path for server-to-server / programmatic access.
+1. **User JWT**: sent via `Authorization: Bearer <token>`. Verified against Bridge's JWKS endpoint. The standard path for browser-based users.
+2. **API token**: sent via `x-api-key` as a JWT. Verified via Bridge token introspection (the app never holds the signing secret). The path for server-to-server / programmatic access.
 
 The two paths are evaluated independently: when both an `x-api-key` and an `Authorization: Bearer` header are present and valid, both contexts coexist on the request (`req.bridgeApiToken` and `req.bridgeUser` are both set).
 
@@ -51,15 +51,16 @@ interface BridgeUser {
   appId?: string;                // App ID from the token (aid claim)
   scope?: string;                // OAuth scopes granted to the token
   role?: string;                 // User's role within the tenant
+  privileges?: string[];         // Privilege strings from the JWT privileges claim
   multiTenantAccess?: boolean;
 }
 ```
 
 The user's `privileges` claim from the JWT is what the route-rule privilege check (below) evaluates against.
 
-### Accessing tenant information
+### Accessing workspace information
 
-The tenant the user is authenticated for is on `req.bridgeTenant`:
+The workspace the user is authenticated for (a workspace is called a *tenant* in the API, which is why the identifiers below say `tenant`) is on `req.bridgeTenant`:
 
 ```typescript
 router.get('/workspace', (req, res) => {
@@ -102,7 +103,7 @@ const tenant = bridge.fromJwt(req.bridgeAccessToken!);
 
 #### Declarative guard (recommended)
 
-Mount `bridge.auth()` as application- or router-level middleware. It reads the `guard` config and applies `defaultAccess` plus your route rules to every route registered after it:
+Mount `bridge.auth()` as app- or router-level middleware. It reads the `guard` config and applies `defaultAccess` plus your route rules to every route registered after it:
 
 ```typescript
 const bridge = createBridge({
@@ -129,7 +130,7 @@ app.get('/health', bridge.public(), (_req, res) => {
 
 #### Per-route protection
 
-`bridge.protect(options?)` always enforces auth on the route it's attached to, regardless of `defaultAccess`. It does **not** consult config route rules — its options *are* the rule. Use it to protect a single route, or to apply role / privilege / feature-flag / accepted-auth overrides:
+`bridge.protect(options?)` always enforces auth on the route it's attached to, regardless of `defaultAccess`. It does **not** consult config route rules; its options *are* the rule. Use it to protect a single route, or to apply role / privilege / feature-flag / accepted-auth overrides:
 
 ```typescript
 // Force auth on one route even if defaultAccess is 'public'
@@ -156,7 +157,7 @@ app.use('/admin', admin);
 
 ### How it works
 
-When an `x-api-key` header carries a JWT-shaped token, Bridge Express verifies it by POSTing it to the Bridge token-introspection endpoint (`{apiBaseUrl}/account/api-token/introspect`). The app never holds the HS256 signing secret — verification is a network call to the Bridge, not a local signature check. The Bridge collapses every rejection (forged, tampered, revoked, expired) into `{ active: false }`. On success, the claims are attached to `req.bridgeApiToken`.
+When an `x-api-key` header carries a JWT-shaped token, Bridge Express verifies it by POSTing it to the Bridge token-introspection endpoint (`{apiBaseUrl}/account/api-token/introspect`). The app never holds the HS256 signing secret; verification is a network call to the Bridge, not a local signature check. The Bridge collapses every rejection (forged, tampered, revoked, expired) into `{ active: false }`. On success, the claims are attached to `req.bridgeApiToken`.
 
 > **User JWTs bypass the `privilege` option.** `bridge.protect({ privilege })` enforces the privilege only for API-token callers. User JWTs are governed by route-rule privilege, `role`, and `featureFlag` instead. This keeps an endpoint that adds a `privilege` option for API tokens from breaking user-JWT access.
 
@@ -166,7 +167,6 @@ When an API token verifies, `req.bridgeApiToken` is set with these claims:
 
 ```typescript
 interface ApiTokenClaims {
-  active: boolean;           // Whether the token is active (always true once attached)
   sub: string;               // Token subject identifier
   appId: string;             // App ID the token was issued for
   tenantId: string | null;   // Tenant ID (null for app-level tokens)
@@ -193,10 +193,10 @@ router.post('/users', bridge.protect({ privilege: 'USER_WRITE' }), handler);
 `acceptAuth` restricts which credential types an endpoint accepts:
 
 ```typescript
-// Only user JWTs accepted — an API token alone gets 401
+// Only user JWTs accepted; an API token alone gets 401
 bridge.protect({ acceptAuth: 'jwt' })
 
-// Only API tokens accepted — a user JWT alone gets 401
+// Only API tokens accepted; a user JWT alone gets 401
 bridge.protect({ acceptAuth: 'api_token' })
 
 // Both accepted (default when omitted)
@@ -205,7 +205,7 @@ bridge.protect({ acceptAuth: 'both' })
 
 The `AuthType` is `'jwt' | 'api_token' | 'both'`.
 
-> When `acceptAuth: 'jwt'` and **both** headers are present (some Bridge frontends always send both), the request is accepted and the JWT path populates `req.bridgeUser`; the API key is treated as informational only. The endpoint is rejected only if the API token is the *only* credential offered.
+> When `acceptAuth: 'jwt'` and **both** headers are present (some Bridge frontends always send both), the request is accepted and the JWT path populates `req.bridgeUser`; the API key is treated as informational only. The request is rejected only if the API token is the *only* credential offered.
 
 ### Dual-auth endpoints
 
@@ -269,14 +269,16 @@ admin.get('/dashboard', (req, res) => {
   res.json({ message: 'Admin dashboard', admin: req.bridgeUser!.email });
 });
 
-// Tighten an individual route to OWNER
-admin.get('/settings', bridge.protect({ role: 'OWNER' }), (req, res) => {
+app.use('/admin', admin);
+
+// A separate OWNER-only route, gated at the route level
+app.get('/billing/account', bridge.protect({ role: 'OWNER' }), (req, res) => {
   res.json({ settings: 'sensitive data' });
 });
-
-app.use('/admin', admin);
 ```
 
-The role check compares `req.bridgeUser.role` (from the verified user JWT) against the required role and returns 403 on mismatch. The role option applies only to the user-JWT path; API-token callers are unaffected by it.
+The role check compares `req.bridgeUser.role` (from the verified user JWT) against the required role and returns 403 on mismatch. It is an **exact match**, and a user has exactly one role per workspace. That means stacking two different `role` checks on the same route (say, a router-level `ADMIN` plus a route-level `OWNER`) locks everyone out: no token can satisfy both. Keep one `role` requirement per route.
 
-> **A note on GraphQL.** Express has no built-in GraphQL execution context. Protect a `/graphql` route with `bridge.protect(...)` like any other route. Per-operation `graphqlOperation` rules exist in the config type but are **not wired** in the Express plugin — do not rely on per-operation GraphQL guarding here.
+The role option applies only to the user-JWT path; API-token callers are unaffected by it.
+
+> **A note on GraphQL.** Express has no built-in GraphQL execution context. Protect a `/graphql` route with `bridge.protect(...)` like any other route. Per-operation `graphqlOperation` rules exist in the config type but are **not wired** in the Express plugin. Do not rely on per-operation GraphQL guarding here.

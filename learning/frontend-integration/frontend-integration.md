@@ -1,4 +1,4 @@
-# Frontend Integration & Token Forwarding
+# Frontend integration and token forwarding
 
 ## How the frontend talks to your Express backend
 
@@ -10,12 +10,12 @@ Authorization: Bearer <access_token>
 
 The flow is:
 
-1. The user logs in via Bridge — your **frontend** owns the login/session lifecycle (using one of the Bridge frontend SDKs).
+1. The user signs in via Bridge; your **frontend** owns the login/session lifecycle (using one of the Bridge frontend SDKs).
 2. The frontend receives and stores the access token.
 3. The frontend includes that token on every API request to your Express backend.
 4. Bridge Express verifies the token, attaches `req.bridgeUser` / `req.bridgeTenant`, and runs your handler.
 
-Your Express app does not handle login, refresh, or session storage — it only **verifies** the token it receives. Keep that responsibility on the frontend.
+Your Express app does not handle login, refresh, or session storage: it only **verifies** the token it receives. Keep that responsibility on the frontend.
 
 ### Sending the token with Fetch
 
@@ -55,14 +55,15 @@ const response = await api.get('/items');
 
 ```svelte
 <script lang="ts">
-  import { auth } from '@nebulr-group/bridge-svelte';
+  import { get } from 'svelte/store';
+  import { tokenStore } from '@nebulr-group/bridge-svelte';
 
   async function fetchItems() {
-    const tokens = auth.getToken();
-    if (!tokens?.accessToken) return;
+    const accessToken = get(tokenStore)?.accessToken;
+    if (!accessToken) return;
 
     const response = await fetch('http://localhost:3000/items', {
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
 
     return response.json();
@@ -129,12 +130,12 @@ app.use(bridge.auth());
 A few CORS specifics for Bridge:
 
 - Include `Authorization` in `allowedHeaders` so the browser can send the Bearer token; include `x-api-key` if any browser-side caller uses API tokens.
-- Expose `WWW-Authenticate` so your frontend's refresh logic can read whether a 401 was `expired_token` vs `invalid_token` (see [Error Handling](../error-handling/error-handling.md)).
+- Expose `WWW-Authenticate` so your frontend's refresh logic can read whether a 401 was `expired_token` vs `invalid_token` (see [Error handling](../error-handling/error-handling.md)).
 - Mount `cors(...)` **before** `bridge.auth()` so preflight `OPTIONS` requests are answered before the guard runs.
 
 ## Token forwarding between services
 
-Use `bridge.http` to call downstream services while forwarding the authenticated user's token, so the downstream service authenticates the same user. The token is passed explicitly — there's no request-scoped magic.
+Use `bridge.http` to call downstream services while forwarding the authenticated user's token, so the downstream service authenticates the same user. The token is passed explicitly; there is no request-scoped magic.
 
 ### Basic token forwarding
 
@@ -188,4 +189,4 @@ router.get('/catalog', async (_req, res) => {
 
 ### Error handling
 
-`bridge.http` throws `BridgeHttpError` on non-2xx responses — see [Error Handling](../error-handling/error-handling.md#bridgehttperror) for the full pattern.
+`bridge.http` throws `BridgeHttpError` on non-2xx responses. See [Error handling](../error-handling/error-handling.md#bridgehttperror) for the full pattern.

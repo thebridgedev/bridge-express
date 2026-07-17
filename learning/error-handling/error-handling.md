@@ -2,25 +2,26 @@
 
 ## How the middleware responds
 
-Bridge Express writes the 401/403 response itself when a request fails authentication or authorization — the middleware does not call `next()` and your handler never runs. Responses follow RFC 6750: 401s carry a `WWW-Authenticate` header so your frontend can distinguish error types and react appropriately.
+Bridge Express writes the 401/403 response itself when a request fails authentication or authorization; the middleware does not call `next()` and your handler never runs. Responses follow RFC 6750: 401s carry a `WWW-Authenticate` header so your frontend can distinguish error types and react appropriately.
 
 ### Error codes
 
 | `WWW-Authenticate` error | Meaning | Recommended action |
 |---|---|---|
-| `missing_token` | No Authorization header was sent | Redirect to login |
+| `missing_token` | No Authorization header was sent | Redirect to the sign-in flow |
 | `expired_token` | Token signature is valid but past expiry | Attempt silent refresh, then redirect |
-| `invalid_token` | Token is malformed, tampered, or uses an unknown key | Redirect to login |
+| `invalid_token` | Token is malformed, tampered, or uses an unknown key | Redirect to the sign-in flow |
 | `invalid_request` | Wrong credential type for this endpoint (e.g. API token sent to a `jwt`-only route) | Use the correct credential |
 
 ### Frontend auto-refresh pattern
 
 ```typescript
 // src/lib/api.ts
-import { auth } from '@nebulr-group/bridge-react'; // or bridge-svelte, etc.
+import { getBridgeAuth } from '@nebulr-group/bridge-react'; // getBridgeAuth is also exported by other Bridge frontend SDKs
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-  const token = auth.getAccessToken();
+  const auth = getBridgeAuth();
+  const token = auth.getTokens()?.accessToken;
 
   const response = await fetch(`http://localhost:3000${endpoint}`, {
     ...options,
@@ -36,8 +37,8 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
     if (wwwAuth.includes('expired_token')) {
       try {
-        await auth.refresh();
-        const newToken = auth.getAccessToken();
+        await auth.refreshTokens();
+        const newToken = auth.getTokens()?.accessToken;
         return fetch(`http://localhost:3000${endpoint}`, {
           ...options,
           headers: {
@@ -47,13 +48,13 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
           },
         }).then((r) => r.json());
       } catch {
-        auth.login();
+        window.location.href = auth.createLoginUrl();
         return;
       }
     }
 
-    // missing_token or invalid_token — redirect to login
-    auth.login();
+    // missing_token or invalid_token: send the user to the sign-in flow
+    window.location.href = auth.createLoginUrl();
     return;
   }
 
@@ -151,9 +152,9 @@ The middleware catches these and maps them to RFC 6750 `WWW-Authenticate` errors
 | `TOKEN_INVALID` | `invalid_token` | The access token is invalid |
 | `JWKS_NO_MATCH` | `invalid_token` | The access token signature could not be verified |
 | `CLAIM_VALIDATION_FAILED` | `invalid_token` | The access token claim validation failed |
-| `APP_MISMATCH` | `invalid_token` | The access token was issued for a different application |
+| `APP_MISMATCH` | `invalid_token` | The access token was issued for a different app |
 
-You don't catch `TokenVerificationError` yourself — the middleware handles it and writes the 401. It is importable (`import { TokenVerificationError } from '@nebulr-group/bridge-express'`) for advanced cases where you verify a token manually.
+You don't catch `TokenVerificationError` yourself; the middleware handles it and writes the 401. It is importable (`import { TokenVerificationError } from '@nebulr-group/bridge-express'`) for advanced cases where you verify a token manually.
 
 ### BridgeHttpError
 
@@ -191,7 +192,7 @@ router.get('/inventory', async (req, res) => {
 
 ### Errors thrown inside your handlers
 
-Bridge Express only writes responses for auth/authz failures. Errors thrown inside your own handlers are yours to handle — register a standard Express error-handling middleware as the last `app.use(...)` to catch them:
+Bridge Express only writes responses for auth/authz failures. Errors thrown inside your own handlers are yours to handle: register a standard Express error-handling middleware as the last `app.use(...)` to catch them:
 
 ```typescript
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
