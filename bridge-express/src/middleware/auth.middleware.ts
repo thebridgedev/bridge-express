@@ -2,6 +2,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
+import { BridgeService } from '../bridge/bridge.service';
 import { transformJwtToBridgeUser } from '../types/user';
 import { transformJwtToBridgeTenant } from '../types/tenant';
 import { FeatureFlagRequirement, RouteRule } from '../types/config';
@@ -71,6 +72,21 @@ export interface BridgeMiddlewareOptions {
   role?: string;
   /** Required feature flag(s) for user-JWT callers (the `@RequireFeatureFlag` analogue). */
   featureFlag?: FeatureFlagRequirement;
+  /**
+   * Restrict to these subscription plan slugs (user-JWT callers). Mismatch →
+   * 402 Payment Required (reason `plan_required`).
+   */
+  plans?: string[];
+  /**
+   * Require this entitlement (user-JWT callers). Missing → 402 Payment Required
+   * (reason `entitlement_missing`).
+   */
+  entitlement?: string;
+  /**
+   * Require ALL of these entitlements (user-JWT callers). Missing → 402 Payment
+   * Required (reason `entitlement_missing`).
+   */
+  entitlements?: string[];
 }
 
 /** Shared dependencies threaded through the guard core. */
@@ -78,6 +94,7 @@ interface GuardDeps {
   configService: BridgeConfigService;
   jwksService: JwksService;
   featureFlagService: FeatureFlagService;
+  bridgeService: BridgeService;
 }
 
 /**
@@ -99,7 +116,7 @@ async function runGuard(
   matchingRule: RouteRule | null,
   options: BridgeMiddlewareOptions,
 ): Promise<boolean> {
-  const { configService, jwksService, featureFlagService } = deps;
+  const { configService, jwksService, featureFlagService, bridgeService } = deps;
   const path = req.path;
   const method = req.method;
 
@@ -289,8 +306,9 @@ async function runGuard(
       configService.log('Role check passed', { role: requiredRole });
     }
 
-    // Feature flag requirement (option only) — user JWT only
-    const requiredFlag = options.featureFlag;
+    // Feature flag requirement — user JWT only. Sourced from either the
+    // protect() option OR the matched config route rule (403 on failure).
+    const requiredFlag = options.featureFlag ?? matchingRule?.featureFlag;
     if (requiredFlag && token) {
       const flagEnabled = await featureFlagService.evaluateRequirement(requiredFlag, token);
       if (!flagEnabled) {
@@ -302,9 +320,82 @@ async function runGuard(
       }
       configService.log('Feature flag check passed', { flag: requiredFlag });
     }
+
+    // Plan / entitlement gating (402 Payment Required) — user JWT only.
+    // Sourced from either the protect() options OR the matched route rule.
+    const requiredPlans = options.plans ?? matchingRule?.plans;
+    const requiredEntitlements = resolveEntitlements(options, matchingRule);
+
+    if ((requiredPlans && requiredPlans.length > 0) || requiredEntitlements.length > 0) {
+      if (!token) {
+        // No user JWT to derive the tenant snapshot from → fail closed.
+        configService.log('Plan/entitlement check failed: no user token to resolve tenant');
+        sendPaymentRequired(res, { reason: 'billing_locked' });
+        return false;
+      }
+
+      // Fetch the tenant snapshot once (subscription + entitlements). Any error
+      // (network, non-200, missing data) fails closed → 402 billing_locked.
+      let snapshot;
+      try {
+        snapshot = await bridgeService.fromJwt(token).snapshot();
+      } catch (error) {
+        configService.log('Plan/entitlement snapshot fetch failed — failing closed', { error });
+        sendPaymentRequired(res, { reason: 'billing_locked' });
+        return false;
+      }
+
+      // Plan check
+      if (requiredPlans && requiredPlans.length > 0) {
+        const planSlug = snapshot?.tenant?.subscription?.plan?.slug;
+        if (!planSlug || !requiredPlans.includes(planSlug)) {
+          configService.log('Plan check failed', { required: requiredPlans, actual: planSlug });
+          sendPaymentRequired(res, {
+            reason: 'plan_required',
+            requiredPlan: requiredPlans.join(', '),
+          });
+          return false;
+        }
+        configService.log('Plan check passed', { plan: planSlug });
+      }
+
+      // Entitlement check (ALL required entitlements must be present)
+      if (requiredEntitlements.length > 0) {
+        const entitlements = snapshot?.tenant?.entitlements ?? {};
+        const missing = requiredEntitlements.find((key) => !entitlements[key]);
+        if (missing) {
+          configService.log('Entitlement check failed', { missing });
+          sendPaymentRequired(res, {
+            reason: 'entitlement_missing',
+            requiredEntitlement: missing,
+          });
+          return false;
+        }
+        configService.log('Entitlement check passed', { entitlements: requiredEntitlements });
+      }
+    }
   }
 
   return true;
+}
+
+/** Merge the `entitlement` (single) and `entitlements` (array) requirement sources. */
+function resolveEntitlements(
+  options: BridgeMiddlewareOptions,
+  matchingRule: RouteRule | null,
+): string[] {
+  const out: string[] = [];
+  const push = (v?: string | string[]) => {
+    if (!v) return;
+    if (Array.isArray(v)) out.push(...v);
+    else out.push(v);
+  };
+  push(options.entitlement);
+  push(options.entitlements);
+  push(matchingRule?.entitlement);
+  push(matchingRule?.entitlements);
+  // Dedupe while preserving order.
+  return [...new Set(out)];
 }
 
 /**
@@ -315,8 +406,9 @@ export function createAuthMiddleware(
   configService: BridgeConfigService,
   jwksService: JwksService,
   featureFlagService: FeatureFlagService,
+  bridgeService: BridgeService,
 ): RequestHandler {
-  const deps: GuardDeps = { configService, jwksService, featureFlagService };
+  const deps: GuardDeps = { configService, jwksService, featureFlagService, bridgeService };
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const path = req.path;
@@ -364,9 +456,10 @@ export function createProtectMiddleware(
   configService: BridgeConfigService,
   jwksService: JwksService,
   featureFlagService: FeatureFlagService,
+  bridgeService: BridgeService,
   options?: BridgeMiddlewareOptions,
 ): RequestHandler {
-  const deps: GuardDeps = { configService, jwksService, featureFlagService };
+  const deps: GuardDeps = { configService, jwksService, featureFlagService, bridgeService };
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const path = req.path;
@@ -411,6 +504,35 @@ function sendForbidden(res: Response, message: string): void {
     error: 'Forbidden',
     message,
   });
+}
+
+/**
+ * Reasons a 402 Payment Required can be raised.
+ * - `plan_required`       — tenant's plan is not in the allowed set
+ * - `entitlement_missing` — a required entitlement is absent
+ * - `billing_locked`      — plan/entitlement state could not be determined (fail closed)
+ */
+type PaymentRequiredReason = 'plan_required' | 'entitlement_missing' | 'billing_locked';
+
+/**
+ * Write a 402 Payment Required response. Dev-friendly body carrying the reason
+ * and what was required (no portal/checkout URL — that's auth-core's job).
+ */
+function sendPaymentRequired(
+  res: Response,
+  detail: {
+    reason: PaymentRequiredReason;
+    requiredPlan?: string;
+    requiredEntitlement?: string;
+  },
+): void {
+  const body: Record<string, unknown> = {
+    error: 'Payment required',
+    reason: detail.reason,
+  };
+  if (detail.requiredPlan) body.requiredPlan = detail.requiredPlan;
+  if (detail.requiredEntitlement) body.requiredEntitlement = detail.requiredEntitlement;
+  res.status(402).json(body);
 }
 
 /**

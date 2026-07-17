@@ -21,6 +21,7 @@ import {
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
+import { BridgeService } from '../bridge/bridge.service';
 
 // Minimal user JWT claims for testing
 const mockClaims = {
@@ -80,6 +81,10 @@ describe('auth middleware', () => {
   let configService: jest.Mocked<BridgeConfigService>;
   let jwksService: jest.Mocked<JwksService>;
   let featureFlagService: jest.Mocked<FeatureFlagService>;
+  let bridgeService: jest.Mocked<BridgeService>;
+  // The TenantScope returned by bridgeService.fromJwt(); its .snapshot() is the
+  // single fetch the guard uses to resolve subscription plan + entitlements.
+  let snapshotMock: jest.Mock;
 
   beforeEach(() => {
     configService = {
@@ -97,13 +102,24 @@ describe('auth middleware', () => {
     featureFlagService = {
       evaluateRequirement: jest.fn(),
     } as any;
+
+    snapshotMock = jest.fn();
+    bridgeService = {
+      fromJwt: jest.fn().mockReturnValue({ snapshot: snapshotMock }),
+    } as any;
   });
 
   function auth() {
-    return createAuthMiddleware(configService, jwksService, featureFlagService);
+    return createAuthMiddleware(configService, jwksService, featureFlagService, bridgeService);
   }
   function protect(options?: any) {
-    return createProtectMiddleware(configService, jwksService, featureFlagService, options);
+    return createProtectMiddleware(
+      configService,
+      jwksService,
+      featureFlagService,
+      bridgeService,
+      options,
+    );
   }
 
   describe('createPublicMiddleware', () => {
@@ -608,6 +624,210 @@ describe('auth middleware', () => {
       await protect({ acceptAuth: 'both' })(req, res, next);
 
       expect(next).toHaveBeenCalled();
+    });
+  });
+
+  // TBP-472 — plan / entitlement / feature-flag gating for the user-JWT path.
+  // Plan and entitlement failures are 402 Payment Required; feature-flag
+  // failures are 403 Forbidden. The plan/entitlement state is resolved from the
+  // tenant snapshot via bridgeService.fromJwt(token).snapshot(). Any failure to
+  // determine that state (fetch error) fails closed → 402 billing_locked.
+  function snapshotWith(plan: string, entitlements: Record<string, boolean> = {}) {
+    return {
+      app: { branding: {} },
+      tenant: {
+        id: 'tenant-1',
+        name: 'Test Tenant',
+        subscription: { plan: { slug: plan, name: plan }, status: 'active' },
+        entitlements,
+      },
+      user: { id: 'user-1', role: 'USER', tenantId: 'tenant-1' },
+    };
+  }
+
+  describe('protect() — plan gating (402 Payment Required)', () => {
+    it('passes when the tenant plan is in the allowed list', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('pro'));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ plans: ['pro', 'enterprise'] })(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(bridgeService.fromJwt).toHaveBeenCalledWith('token');
+    });
+
+    it('returns 402 plan_required when the tenant plan is not allowed', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('free'));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ plans: ['pro', 'enterprise'] })(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body).toEqual({
+        error: 'Payment required',
+        reason: 'plan_required',
+        requiredPlan: 'pro, enterprise',
+      });
+    });
+
+    it('enforces plans declared on a config route rule via auth()', async () => {
+      configService.findMatchingRule.mockReturnValue({
+        path: '/premium/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('free'));
+
+      const { req, res, next } = makeReqRes({
+        path: '/premium/report',
+        headers: { authorization: 'Bearer token' },
+      });
+      await auth()(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body.reason).toBe('plan_required');
+    });
+  });
+
+  describe('protect() — entitlement gating (402 Payment Required)', () => {
+    it('passes when the required entitlement is present', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('pro', { export: true }));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ entitlement: 'export' })(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('returns 402 entitlement_missing when the entitlement is absent', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('pro', { export: false }));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ entitlement: 'export' })(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body).toEqual({
+        error: 'Payment required',
+        reason: 'entitlement_missing',
+        requiredEntitlement: 'export',
+      });
+    });
+
+    it('requires ALL entitlements when an array is given (402 on first missing)', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('pro', { export: true, api: false }));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ entitlements: ['export', 'api'] })(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body.reason).toBe('entitlement_missing');
+      expect(res._body.requiredEntitlement).toBe('api');
+    });
+
+    it('enforces entitlement declared on a config route rule via auth()', async () => {
+      configService.findMatchingRule.mockReturnValue({
+        path: '/export/*',
+        privilege: 'AUTHENTICATED',
+        entitlement: 'export',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockResolvedValue(snapshotWith('pro', {}));
+
+      const { req, res, next } = makeReqRes({
+        path: '/export/csv',
+        headers: { authorization: 'Bearer token' },
+      });
+      await auth()(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body.reason).toBe('entitlement_missing');
+    });
+  });
+
+  describe('protect() — fail-closed on snapshot fetch error (402 billing_locked)', () => {
+    it('returns 402 billing_locked when the snapshot fetch throws (plan rule)', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockRejectedValue(new Error('GET /session/init failed: 500'));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ plans: ['pro'] })(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body).toEqual({ error: 'Payment required', reason: 'billing_locked' });
+    });
+
+    it('returns 402 billing_locked when the snapshot fetch throws (entitlement rule)', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      snapshotMock.mockRejectedValue(new Error('network blew up'));
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ entitlement: 'export' })(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(402);
+      expect(res._body.reason).toBe('billing_locked');
+    });
+
+    it('does NOT fetch the snapshot when no plan/entitlement rule is present', async () => {
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const { req, res, next } = makeReqRes({ headers: { authorization: 'Bearer token' } });
+      await protect({ role: 'USER' })(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(bridgeService.fromJwt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('protect() — feature-flag gating from a config route rule (403 Forbidden)', () => {
+    it('passes when the route-rule feature flag is enabled', async () => {
+      configService.findMatchingRule.mockReturnValue({
+        path: '/beta/*',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'beta-access',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      featureFlagService.evaluateRequirement.mockResolvedValue(true);
+
+      const { req, res, next } = makeReqRes({
+        path: '/beta/thing',
+        headers: { authorization: 'Bearer token' },
+      });
+      await auth()(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(featureFlagService.evaluateRequirement).toHaveBeenCalledWith('beta-access', 'token');
+    });
+
+    it('returns 403 when the route-rule feature flag is disabled', async () => {
+      configService.findMatchingRule.mockReturnValue({
+        path: '/beta/*',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'beta-access',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      featureFlagService.evaluateRequirement.mockResolvedValue(false);
+
+      const { req, res, next } = makeReqRes({
+        path: '/beta/thing',
+        headers: { authorization: 'Bearer token' },
+      });
+      await auth()(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res._status).toBe(403);
     });
   });
 });
