@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { BridgeConfigService } from './bridge-config.service';
 import { FeatureFlagRequirement } from '../types/config';
 
@@ -171,10 +172,32 @@ export class FeatureFlagService {
   }
 
   /**
-   * Generate a cache key from the access token (use first 16 chars)
+   * Generate a cache key from the access token.
+   *
+   * TBP-517 — this used to be `accessToken.substring(0, 16)`. Those 16
+   * base64url characters cover only the first 12 bytes of the JWT *protected
+   * header*, which decode to the literal `{"alg":"PS25` for every token
+   * bridge-api issues. The `kid` starts at byte 28 of the header JSON, well
+   * past the cut, so not even key rotation moved it. The "key" was therefore a
+   * constant: every user of an app shared a single cache entry, the first
+   * caller warmed it, and everyone else was served that user's evaluations for
+   * the full TTL — defeating role, plan, tenant and percentage-rollout
+   * targeting across user boundaries.
+   *
+   * Hashing the whole token restores a genuinely per-caller key. We hash rather
+   * than key on the raw token so the map keys are fixed-width and the bearer
+   * credential does not sit in a long-lived in-process structure that ends up
+   * in heap dumps and debug output.
+   *
+   * Deliberately NOT keyed on the resolved `sub` (+ tenant): this service never
+   * parses or verifies the token, and claim-level keying would merge two tokens
+   * for the same subject whose *claims* differ — a re-login or refresh after a
+   * role, plan or tenant change would then read a stale entry belonging to the
+   * pre-change token. The full-token hash is the finest-grained key available
+   * and preserves the existing per-token TTL semantics exactly.
    */
   private getCacheKey(accessToken: string): string {
-    return accessToken.substring(0, 16);
+    return createHash('sha256').update(accessToken).digest('hex');
   }
 
   /**
