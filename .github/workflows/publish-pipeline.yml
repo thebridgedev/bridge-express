@@ -22,5 +22,4 @@ jobs:
       build-command: npm run build
       test-command: npm test
     secrets:
-      npm-token: ${{ secrets.NPM_TOKEN }}
       docs-sync-key: ${{ secrets.DOCS_SYNC_KEY }}
