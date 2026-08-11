@@ -11,14 +11,19 @@ function makeService(overrides: Record<string, any> = {}): BridgeConfigService {
 
 describe('BridgeConfigService', () => {
   describe('defaults', () => {
-    it('should use default authBaseUrl when not provided', () => {
+    it('should derive authBaseUrl from default apiBaseUrl', () => {
       const svc = makeService();
-      expect(svc.authBaseUrl).toBe(BRIDGE_DEFAULTS.authBaseUrl);
+      expect(svc.authBaseUrl).toBe(`${BRIDGE_DEFAULTS.apiBaseUrl}/auth`);
     });
 
-    it('should use default backendlessBaseUrl when not provided', () => {
+    it('should derive cloudViewsBaseUrl from default apiBaseUrl', () => {
       const svc = makeService();
-      expect(svc.backendlessBaseUrl).toBe(BRIDGE_DEFAULTS.backendlessBaseUrl);
+      expect(svc.cloudViewsBaseUrl).toBe(`${BRIDGE_DEFAULTS.apiBaseUrl}/cloud-views`);
+    });
+
+    it('should expose the resolved apiBaseUrl', () => {
+      const svc = makeService();
+      expect(svc.apiBaseUrl).toBe(BRIDGE_DEFAULTS.apiBaseUrl);
     });
 
     it('should default debug to false', () => {
@@ -30,20 +35,67 @@ describe('BridgeConfigService', () => {
       const svc = makeService();
       expect(svc.defaultAccess).toBe('protected');
     });
-  });
 
-  describe('jwksUrl', () => {
-    it('should compute jwksUrl from authBaseUrl', () => {
-      const svc = makeService({ authBaseUrl: 'https://auth.example.com' });
-      expect(svc.jwksUrl).toBe('https://auth.example.com/.well-known/jwks.json');
+    it('should default rules to an empty array', () => {
+      const svc = makeService();
+      expect(svc.rules).toEqual([]);
+    });
+
+    it('should default introspectionCacheTtlMs to undefined', () => {
+      const svc = makeService();
+      expect(svc.introspectionCacheTtlMs).toBeUndefined();
     });
   });
 
-  describe('findMatchingRule', () => {
+  describe('apiBaseUrl override', () => {
+    it('should use the provided apiBaseUrl and derive children from it', () => {
+      const svc = makeService({ apiBaseUrl: 'https://api.example.com' });
+      expect(svc.apiBaseUrl).toBe('https://api.example.com');
+      expect(svc.authBaseUrl).toBe('https://api.example.com/auth');
+      expect(svc.cloudViewsBaseUrl).toBe('https://api.example.com/cloud-views');
+    });
+  });
+
+  describe('jwksUrl', () => {
+    it('should derive jwksUrl from apiBaseUrl (under /auth)', () => {
+      const svc = makeService({ apiBaseUrl: 'https://api.example.com' });
+      expect(svc.jwksUrl).toBe('https://api.example.com/auth/.well-known/jwks.json');
+    });
+
+    it('should use userJwksUrl override when provided', () => {
+      const svc = makeService({
+        userJwksUrl: 'http://host.docker.internal:3200/auth/.well-known/jwks.json',
+      });
+      expect(svc.jwksUrl).toBe('http://host.docker.internal:3200/auth/.well-known/jwks.json');
+    });
+  });
+
+  describe('introspectionUrl', () => {
+    it('should derive introspectionUrl directly under apiBaseUrl (NOT under /auth)', () => {
+      const svc = makeService({ apiBaseUrl: 'https://api.example.com' });
+      expect(svc.introspectionUrl).toBe('https://api.example.com/account/api-token/introspect');
+    });
+
+    it('should use introspectionUrl override when provided', () => {
+      const svc = makeService({
+        introspectionUrl: 'http://host.docker.internal:3200/account/api-token/introspect',
+      });
+      expect(svc.introspectionUrl).toBe(
+        'http://host.docker.internal:3200/account/api-token/introspect',
+      );
+    });
+
+    it('should expose introspectionCacheTtlMs when configured', () => {
+      const svc = makeService({ introspectionCacheTtlMs: 5000 });
+      expect(svc.introspectionCacheTtlMs).toBe(5000);
+    });
+  });
+
+  describe('findMatchingRule (REST path matching)', () => {
     const rules = [
-      { path: '/health', public: true },
-      { path: '/admin/*', role: 'ADMIN' },
-      { path: '/items', methods: ['GET'] as any },
+      { path: '/health', privilege: 'ANONYMOUS' },
+      { path: '/admin/*', privilege: 'TENANT_WRITE' },
+      { path: '/items', privilege: 'AUTHENTICATED' },
     ];
     let svc: BridgeConfigService;
 
@@ -55,6 +107,7 @@ describe('BridgeConfigService', () => {
       const rule = svc.findMatchingRule('/health', 'GET');
       expect(rule).not.toBeNull();
       expect(rule!.path).toBe('/health');
+      expect(rule!.privilege).toBe('ANONYMOUS');
     });
 
     it('should return wildcard match', () => {
@@ -63,17 +116,43 @@ describe('BridgeConfigService', () => {
       expect(rule!.path).toBe('/admin/*');
     });
 
-    it('should respect method filter', () => {
-      const rule = svc.findMatchingRule('/items', 'GET');
-      expect(rule).not.toBeNull();
-
-      const noRule = svc.findMatchingRule('/items', 'POST');
-      expect(noRule).toBeNull();
+    it('should match path regardless of method', () => {
+      expect(svc.findMatchingRule('/items', 'GET')).not.toBeNull();
+      expect(svc.findMatchingRule('/items', 'POST')).not.toBeNull();
     });
 
     it('should return null when no rule matches', () => {
-      const rule = svc.findMatchingRule('/unknown/path', 'GET');
-      expect(rule).toBeNull();
+      expect(svc.findMatchingRule('/unknown/path', 'GET')).toBeNull();
+    });
+  });
+
+  describe('findMatchingRule (GraphQL operation matching)', () => {
+    let svc: BridgeConfigService;
+
+    beforeEach(() => {
+      svc = makeService({
+        guard: {
+          rules: [
+            { graphqlOperation: 'listUsers', privilege: 'TENANT_READ' },
+            { path: '/health', privilege: 'ANONYMOUS' },
+          ],
+        },
+      });
+    });
+
+    it('should match against the GraphQL operation name when provided', () => {
+      const rule = svc.findMatchingRule('/graphql', 'POST', 'listUsers');
+      expect(rule).not.toBeNull();
+      expect(rule!.graphqlOperation).toBe('listUsers');
+    });
+
+    it('should return null when no GraphQL operation matches', () => {
+      expect(svc.findMatchingRule('/graphql', 'POST', 'createUser')).toBeNull();
+    });
+
+    it('should NOT consult REST path rules when an operationName is given', () => {
+      // operationName branch only consults graphqlOperation rules
+      expect(svc.findMatchingRule('/health', 'GET', 'unknownOp')).toBeNull();
     });
   });
 
@@ -84,9 +163,9 @@ describe('BridgeConfigService', () => {
       svc = makeService({
         guard: {
           rules: [
-            { path: '/exact', public: true },
-            { path: '/wildcard/*', public: true },
-            { path: 'no-leading-slash', public: true },
+            { path: '/exact', privilege: 'ANONYMOUS' },
+            { path: '/wildcard/*', privilege: 'ANONYMOUS' },
+            { path: 'no-leading-slash', privilege: 'ANONYMOUS' },
           ],
         },
       });

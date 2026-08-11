@@ -3,3 +3,9 @@ dist/
 *.tgz
 *.tsbuildinfo
 .env
+.env.*
+!.env.example
+!e2e/config/.env.test.local.example
+
+# E2E — generated env (written by e2e:setup)
+e2e/config/.env.test.local
