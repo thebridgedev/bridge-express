@@ -25,14 +25,16 @@ module.exports = {
   globalSetup: '<rootDir>/e2e/global-setup.js',
   globalTeardown: '<rootDir>/e2e/global-teardown.js',
 
-  // auth-core ships as native ESM (`"type": "module"`), and bridge-express
-  // depends on it. Mirror the plugin's unit jest config so Jest's CJS runner
-  // can load it without switching this project to ESM: (1) transform `.js/.mjs`
-  // too — not just `.ts` — so auth-core's emitted ESM is down-leveled;
-  // (2) whitelist the package in transformIgnorePatterns so Jest stops skipping
-  // it in node_modules; (3) strip NodeNext `.js` suffixes from auth-core's
-  // internal subpath imports. Without these, every e2e spec crashes at
-  // module-load with `SyntaxError: Unexpected token 'export'`.
+  // auth-core ships as native ESM (`"type": "module"`), and since
+  // auth-core 0.4.0-beta.11 so does its `jose` dependency — jose 6 dropped its
+  // CommonJS build and is ESM-only (TBP-225). bridge-express reaches both.
+  // Mirror the plugin's unit jest config so Jest's CJS runner can load them
+  // without switching this project to ESM: (1) transform `.js/.mjs` too — not
+  // just `.ts` — so the emitted ESM is down-leveled; (2) whitelist both
+  // packages in transformIgnorePatterns so Jest stops skipping them in
+  // node_modules; (3) strip NodeNext `.js` suffixes from auth-core's internal
+  // subpath imports. Without these, every e2e spec crashes at module-load with
+  // `SyntaxError: Unexpected token 'export'`.
   transform: {
     '^.+\\.[jt]sx?$': [
       'ts-jest',
@@ -44,7 +46,7 @@ module.exports = {
     ],
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@nebulr-group/bridge-auth-core)/)',
+    'node_modules/(?!(@nebulr-group/bridge-auth-core|jose)/)',
   ],
   moduleNameMapper: {
     '^@nebulr-group/bridge-auth-core/(.*)\\.js$': '@nebulr-group/bridge-auth-core/$1',
