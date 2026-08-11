@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-express",
-  "version": "0.1.0-beta.1",
+  "version": "0.4.0-beta.0",
   "description": "Bridge authentication and authorization middleware for Express.js",
   "author": "Nebulr Group",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
-    "@nebulr-group/bridge-auth-core": "0.4.0-beta.6",
+    "@nebulr-group/bridge-auth-core": "0.4.0-beta.11",
     "jose": "^6.0.10"
   },
   "peerDependencies": {
@@ -47,7 +47,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nebulr-group/bridge-express.git"
+    "url": "git+https://github.com/thebridgedev/bridge-express.git"
   },
   "homepage": "https://thebridge.dev"
 }

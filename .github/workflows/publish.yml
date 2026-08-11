@@ -32,11 +32,6 @@ on:
         required: false
         default: 'npm test'
         type: string
-      publish-command:
-        description: Command used to publish the package
-        required: false
-        default: 'npm publish --provenance --access public'
-        type: string
       package-name:
         description: Optional npm package name (falls back to package.json name if omitted)
         required: false
@@ -47,9 +42,6 @@ on:
         default: true
         type: boolean
     secrets:
-      npm-token:
-        description: Token used to publish the package to npm
-        required: true
       docs-sync-key:
         description: SSH key used to sync documentation
         required: false
@@ -103,13 +95,6 @@ jobs:
           ${{ inputs.install-command }}
           ${{ inputs.build-command }}
 
-      - name: 🔐 Configure npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
-        run: |
-          npm config set //registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-
       - name: 🛑 Pre-publish validation
         env:
           INPUT_PACKAGE_NAME: ${{ inputs.package-name }}
@@ -150,26 +135,26 @@ jobs:
           echo "Detected dist-tag: $DIST_TAG"
           echo "DIST_TAG=$DIST_TAG" >> "$GITHUB_ENV"
 
+      # Authentication is npm Trusted Publishing (OIDC), not a token. npm claims
+      # the identity of this workflow from the `id-token: write` credential, so
+      # NODE_AUTH_TOKEN must be *empty*: actions/setup-node writes an .npmrc with
+      # an `${NODE_AUTH_TOKEN}` placeholder, and leaving a stale or invalid value
+      # in it makes npm attempt token auth and fail. A failed-auth PUT to a scoped
+      # package returns 404, not 401 — which is exactly how this repo's
+      # v0.1.0-beta.1 publish failed.
       - name: 🚀 Publish package
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
-          PUBLISH_COMMAND: ${{ inputs.publish-command }}
+          NODE_AUTH_TOKEN: ""
           DIST_TAG: ${{ env.DIST_TAG }}
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if [ -z "$PUBLISH_COMMAND" ]; then
-            if [ "$DIST_TAG" = "latest" ]; then
-              echo "Publishing with default command (latest dist-tag)"
-              npm publish --provenance --access public
-            else
-              echo "Publishing with default command using dist-tag: $DIST_TAG"
-              npm publish --provenance --access public --tag "$DIST_TAG"
-            fi
+          npm install -g npm@11
+          if [ "$DIST_TAG" = "latest" ]; then
+            echo "Publishing with dist-tag: latest"
+            npm publish --provenance --access public
           else
-            printf '%s\n' "$PUBLISH_COMMAND" > .publish-command.sh
-            chmod +x .publish-command.sh
-            echo "Running custom publish command (DIST_TAG=$DIST_TAG)"
-            bash .publish-command.sh
+            echo "Publishing with dist-tag: $DIST_TAG"
+            npm publish --provenance --access public --tag "$DIST_TAG"
           fi
 
       - name: ✨ Create GitHub Release
