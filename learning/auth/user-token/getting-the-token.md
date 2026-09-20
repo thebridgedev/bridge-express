@@ -106,4 +106,4 @@ router.get('/billing/plan', async (req, res) => {
 });
 ```
 
-See [How the token is kept current](/auth/user-token/object-updates/) for how fresh this snapshot is relative to the JWT-decoded fields, and [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/) for how tenant scoping is enforced.
+See [How the token is kept current](/auth/user-token/object-updates/) for how fresh this snapshot is relative to the JWT-decoded fields, and [Multi-tenancy](/auth/multi-tenancy/) for how tenant scoping is enforced.
