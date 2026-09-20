@@ -52,4 +52,4 @@ There is no live server-side channel for this data either; see [Tenant Data](../
 
 ## Reacting to a change without polling: webhooks
 
-If your Express app needs to *do something* the moment a workspace or user changes server-side (provision a resource, invalidate your own cache, send a notification), don't poll `bridge.fromJwt(...)`; handle Bridge's webhooks instead. See [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/) for the event types and a public webhook-handling route.
+If your Express app needs to *do something* the moment a workspace or user changes server-side (provision a resource, invalidate your own cache, send a notification), don't poll `bridge.fromJwt(...)`; handle Bridge's webhooks instead. See [Multi-tenancy](/auth/multi-tenancy/) for the event types and a public webhook-handling route.
