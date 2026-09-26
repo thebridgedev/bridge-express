@@ -1,0 +1,16 @@
+name: PR gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: thebridgedev/auth-core/.github/workflows/merge-gate.yml@main
+    with:
+      # npm workspace with a root package-lock: frozen install.
+      working-directory: .
+      install-command: npm ci --ignore-scripts --no-audit --no-fund
