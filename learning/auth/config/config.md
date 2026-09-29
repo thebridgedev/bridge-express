@@ -148,4 +148,4 @@ bridge setup sso --provider google --client-id <clientId> --client-secret <clien
 ```
 
 - **Control Center:** the same settings, managed from your app's settings.
-- **MCP:** not yet available; coming soon.
+- **MCP (AI-assistant integration):** connect your AI assistant to `https://api.thebridge.dev/mcp` as a remote MCP server (sign in and approve access to your app in the browser when it asks). Its `add_redirect_uri` and `remove_redirect_uri` tools change redirect URIs one at a time, `update_app` sets allowed origins (the list you pass replaces the whole list) and the default callback URL, and `setup_sso` saves an SSO provider's credentials and turns it on.
