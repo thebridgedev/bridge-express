@@ -6,4 +6,6 @@ export type {
   UserSnapshot,
   SessionSnapshotData,
   TenantEntitlementsView,
+  TenantUsageView,
+  QuotaSnapshot,
 } from './tenant-scope';

@@ -85,13 +85,12 @@ That 403 `FEATURE_OFF` body is what the guard writes when a flag is switched off
 | Option | Type | Applies to | Failure |
 |---|---|---|---|
 | `featureFlag` | `string \| { any: string[] } \| { all: string[] }` | user JWT only | `402` plan / `403` otherwise |
-| `role` | `string` | user JWT only | `403` |
 | `privilege` | `string` | API-token callers only | `403` |
 | `acceptAuth` | `'jwt' \| 'api_token' \| 'both'` (default `'both'`) | credential type | `401` |
-| `plans` | `string[]` | user JWT only | `402` `plan_required` |
-| `entitlement` / `entitlements` | `string` / `string[]` | user JWT only | `402` `entitlement_missing` |
 
 `protect()` always enforces auth and ignores config route rules — its options *are* the rule. Under `bridge.auth()`, a matched `RouteRule` may carry `featureFlag` instead, gating centrally from config.
+
+**Every gate is a flag.** Role, privilege and plan go in the flag's rule (`privileges contains "USER_WRITE"`, `bridge:billing.entitlement.<key> eq true`), never in app code. The old `role`, `plans`, `entitlement` and `entitlements` options (and route rules with a privilege key) were removed and throw at startup, naming the flag to use. Numbers a plan allows are plan limits — `bridge.requireQuota(metric)` — not flags; see `billing-prompt.md`.
 
 **Programmatic — `FeatureFlagService`** reads a flag inside a handler so you can *branch* rather than reject:
 
@@ -196,7 +195,7 @@ When a decision depends on a fact only your backend knows ("more than 3 active p
 - **User-JWT callers only.** The flag check is skipped for API-token (`x-api-key`) callers; they are governed by `privilege` instead. Don't gate an M2M endpoint with `featureFlag`.
 - **No realtime, no auto-creation.** There is no WebSocket subscription and no flag registry side effect. A dashboard change lands on the next evaluation after the cache TTL, and a key you never created stays off.
 
-For anything this prompt doesn't cover — router-wide gating, `any`/`all` combinations, plan/entitlement gating, in-handler patterns — read `learning/feature-flags/` (`using/guard-routes.md`, `using/in-logic.md`, `using/backend.md`, `targeting/`) rather than guessing an API.
+For anything this prompt doesn't cover — router-wide gating, `any`/`all` combinations, plan-feature targeting, in-handler patterns — read `learning/feature-flags/` (`using/guard-routes.md`, `using/in-logic.md`, `using/backend.md`, `targeting/`) rather than guessing an API.
 
 ## Troubleshooting
 

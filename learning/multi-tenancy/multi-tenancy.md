@@ -1,7 +1,7 @@
 # Multi-tenancy patterns
 
 > Looking for the current tenant's subscription, entitlements, or branding inside a request? See
-> [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md).
+> [Tenant data via `bridge.fromRequest(req)`](../bridge-service/bridge-service.md).
 
 Every authenticated request carries a workspace (called a *tenant* in the API). The verified tenant ID is available as `req.bridgeUser.tenantId` (and `req.bridgeTenant.id`). The patterns below cover how to keep each tenant's data separate and how to provision tenant records in your own database.
 

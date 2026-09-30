@@ -25,18 +25,18 @@ bridge role create --name Member --key MEMBER --privileges AUTHENTICATED,USER_RE
 bridge role create --name Viewer --key VIEWER --privileges AUTHENTICATED,USER_READ
 ```
 
-Enforcing this set from Express: gate on the role with `bridge.protect({ role })`, or gate on a privilege with a route rule (route-rule privileges are checked against the user JWT's `privileges` claim; note that the `privilege` *option* on `bridge.protect(...)` applies to API-token callers only, so it's not the tool for gating signed-in people):
+Enforcing this set from Express: every gate is a flag. Put a flag on the route and rule the flag on a privilege, so any role carrying it qualifies (the `privilege` *option* on `bridge.protect(...)` applies to API-token callers only, so it's not the tool for gating signed-in people):
 
 ```typescript
-router.get('/settings', bridge.protect({ role: 'ADMIN' }), handler);
+// Flag `manage-settings`, rule: privileges contains "USER_WRITE" (Admin, not Member or Viewer)
+router.get('/settings', bridge.protect({ featureFlag: 'manage-settings' }), handler);
 
-// Privilege-gate via a route rule: any role carrying TENANT_READ
+// Or centrally, as a route rule. Flag `reports`, rule: privileges contains "TENANT_READ"
 // (Member and Admin above, but not Viewer) can reach /reports/*.
 const bridge = createBridge({
-  appId,
   guard: {
     defaultAccess: 'protected',
-    rules: [{ path: '/reports/*', privilege: 'TENANT_READ' }],
+    rules: [{ path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' }],
   },
 });
 ```
@@ -56,19 +56,9 @@ Assign it to that client's users:
 bridge user invite --email user@enterprise-client.com --role ENTERPRISE_BETA --tenant-id <theirTenantId>
 ```
 
-The privilege alone doesn't turn the feature on for your API; gate the route on it directly (or, if the rollout should be toggleable without a redeploy, layer a feature flag on top; see [Gate features by role or privilege](/auth/roles/gate-with-flags/)):
+The privilege alone doesn't turn the feature on for your API; put a flag on the route and rule it on the privilege, so any future role that carries `BETA_REPORTS` also qualifies (see [Gate features by role or privilege](/auth/roles/gate-with-flags/)):
 
 ```typescript
-// Gate on the role:
-router.get('/reports/beta', bridge.protect({ role: 'ENTERPRISE_BETA' }), handler);
-
-// Or gate on the privilege via a route rule, so any future role
-// that carries BETA_REPORTS also qualifies:
-const bridge = createBridge({
-  appId,
-  guard: {
-    defaultAccess: 'protected',
-    rules: [{ path: '/reports/beta', privilege: 'BETA_REPORTS' }],
-  },
-});
+// Flag `beta_reports`, rule: privileges contains "BETA_REPORTS"
+router.get('/reports/beta', bridge.protect({ featureFlag: 'beta_reports' }), handler);
 ```

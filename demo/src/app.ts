@@ -4,10 +4,9 @@ import { createBridge } from '@nebulr-group/bridge-express';
 const app = express();
 app.use(express.json());
 
+// Settings come from BRIDGE_APP_ID / BRIDGE_API_BASE_URL / BRIDGE_DEBUG when
+// none are passed (explicit option > env > default).
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID || 'demo-app-id',
-  apiBaseUrl: process.env.BRIDGE_API_BASE_URL,
-  debug: process.env.BRIDGE_DEBUG === 'true',
   guard: {
     defaultAccess: 'protected',
     rules: [
@@ -15,11 +14,12 @@ const bridge = createBridge({
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/api/public/*', privilege: 'ANONYMOUS' },
 
-      // Any authenticated user JWT
+      // Any signed-in caller
       { path: '/items', privilege: 'AUTHENTICATED' },
 
-      // Privilege-gated for user JWTs (the user's `privileges` claim must include it)
-      { path: '/reports/*', privilege: 'TENANT_READ' },
+      // Who gets reports is a flag; its rule says why
+      // (e.g. `privileges contains "TENANT_READ"`).
+      { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
     ],
   },
 });
@@ -45,7 +45,7 @@ app.get('/items', (req, res) => {
   });
 });
 
-// Privilege-gated for user JWTs via config rule (TENANT_READ)
+// Flag-gated via config rule (featureFlag: 'reports')
 app.get('/reports/summary', (req, res) => {
   res.json({
     report: 'summary',
@@ -53,8 +53,9 @@ app.get('/reports/summary', (req, res) => {
   });
 });
 
-// Role-protected per-route (the @RequireRole analogue — user JWT only)
-app.get('/admin/users', bridge.protect({ role: 'ADMIN' }), (req, res) => {
+// Admin area — every gate is a flag. Give `admin-panel` the rule
+// `privileges contains "USER_WRITE"` (or whatever decides it) in Bridge.
+app.get('/admin/users', bridge.protect({ featureFlag: 'admin-panel' }), (req, res) => {
   res.json({
     users: [],
     requestedBy: req.bridgeUser,
@@ -68,6 +69,45 @@ app.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req, r
     user: req.bridgeUser,
   });
 });
+
+// ── Plan limits (TBP-745) ──────────────────────────────────────────────────
+// A gauge: tickets exist, so the app counts them. The request is refused with
+// 402 QUOTA_EXCEEDED at the limit; after a 2xx the gauge is set to the count.
+const tickets = new Map<string, string[]>();
+const countFor = (tenantId: string) => (tickets.get(tenantId) ?? []).length;
+
+app.post(
+  '/tickets',
+  bridge.requireQuota('tickets', { current: (t) => countFor(t.id) }),
+  (req, res) => {
+    const list = tickets.get(req.bridgeTenant!.id) ?? [];
+    list.push(`ticket-${list.length + 1}`);
+    tickets.set(req.bridgeTenant!.id, list);
+    res.status(201).json({ id: list[list.length - 1] });
+  },
+);
+
+// Deleting one frees room: after the 2xx the gauge is set to the new count.
+app.delete(
+  '/tickets/:id',
+  bridge.syncQuota('tickets', { current: (t) => countFor(t.id) }),
+  (req, res) => {
+    const list = (tickets.get(req.bridgeTenant!.id) ?? []).filter((id) => id !== req.params.id);
+    tickets.set(req.bridgeTenant!.id, list);
+    res.json({ ok: true });
+  },
+);
+
+// A counter: exports happen, so Bridge counts them. Who may export is a flag;
+// how many is the quota. A retry with the same Idempotency-Key counts once.
+app.post(
+  '/exports',
+  bridge.protect({ featureFlag: 'exports-enabled' }),
+  bridge.requireQuota('exports'),
+  (_req, res) => {
+    res.json({ exported: true });
+  },
+);
 
 // M2M endpoint — accepts a Bridge API token (x-api-key) only, requiring a
 // specific privilege. User JWTs are rejected here (@AcceptAuth('api_token')).
@@ -83,14 +123,9 @@ app.post(
   },
 );
 
-// Unified backend surface (TBP-341) — entitlement check for the caller's tenant.
-app.get('/features/export', async (req, res) => {
-  const tenant = bridge.fromJwt(req.bridgeAccessToken!);
-  if (!(await tenant.entitlements.can('export'))) {
-    res.status(403).json({ error: 'Forbidden', message: "Entitlement 'export' required" });
-    return;
-  }
-  res.json({ subscription: await tenant.subscription });
+// Unified backend surface — the tenant view for the verified user.
+app.get('/me/subscription', async (req, res) => {
+  res.json({ subscription: await bridge.fromRequest(req).subscription });
 });
 
 // Token forwarding — calls /items internally with forwarded token
@@ -108,15 +143,18 @@ app.listen(PORT, () => {
   console.log(`Bridge Express demo running on http://localhost:${PORT}`);
   console.log('');
   console.log('Routes:');
-  console.log('  GET  /health              — public (ANONYMOUS)');
-  console.log('  GET  /api/public/info     — public (bridge.public() middleware)');
-  console.log('  GET  /items               — protected (any authenticated user)');
-  console.log('  GET  /reports/summary     — user JWT with TENANT_READ privilege');
-  console.log('  GET  /admin/users         — ADMIN role required (protect middleware)');
-  console.log('  GET  /beta/feature        — beta-access feature flag required');
-  console.log('  POST /integrations/sync   — API token (x-api-key) with TENANT_WRITE');
-  console.log('  GET  /features/export     — entitlement check via bridge.fromJwt()');
-  console.log('  GET  /forward/items       — token forwarding demo');
+  console.log('  GET    /health            — public (ANONYMOUS)');
+  console.log('  GET    /api/public/info   — public (bridge.public() middleware)');
+  console.log('  GET    /items             — protected (any authenticated user)');
+  console.log("  GET    /reports/summary   — 'reports' flag (config rule)");
+  console.log("  GET    /admin/users       — 'admin-panel' flag (protect middleware)");
+  console.log("  GET    /beta/feature      — 'beta-access' flag");
+  console.log("  POST   /tickets           — 'tickets' quota (gauge)");
+  console.log("  DELETE /tickets/:id       — keeps the 'tickets' gauge in step");
+  console.log("  POST   /exports           — 'exports-enabled' flag + 'exports' quota (counter)");
+  console.log('  POST   /integrations/sync — API token (x-api-key) with TENANT_WRITE');
+  console.log('  GET    /me/subscription   — bridge.fromRequest(req)');
+  console.log('  GET    /forward/items     — token forwarding demo');
 });
 
 export { app };

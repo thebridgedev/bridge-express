@@ -52,29 +52,31 @@ Same pattern for plan-gating a premium endpoint:
 router.get('/exports', bridge.protect({ featureFlag: 'export_reports' }), handler);
 ```
 
-Rule: *on for users matching `tenant.plan equals ENTERPRISE`*. If you're
-gating something billing already grants access to, prefer targeting an
-entitlement over a raw plan name; it survives plan renames and custom
-per-workspace grants. See
+Rule: *on for users matching `bridge:billing.entitlement.export_reports eq true`*,
+after listing `export_reports` on the plans that sell it. Prefer the plan
+feature over a raw plan name (`tenant.plan equals ENTERPRISE`); it survives
+plan renames and custom per-workspace grants, and a workspace without it gets
+`402 FEATURE_NOT_IN_PLAN` pointing at your upgrade page. See
 [Lock features to a plan](/billing/limits/lock-features/) for that pattern.
 
 ## Role vs privilege
 
-Targeting the **role** is simplest when the role only ever means one thing.
-Targeting a **privilege** (`privileges contains "BETA_REPORTS"`) scales better
-when several roles might eventually need the same access: grant them the
-privilege instead of duplicating the flag rule per role. Notably, the backend
+Prefer a **privilege** rule (`privileges contains "BETA_REPORTS"`): it scales
+when several roles need the same access (grant them the privilege instead of
+duplicating the flag rule per role). Write a **role** rule
+(`user.role eq "ADMIN"`) only when you mean the role itself. Notably, the backend
 sees the full `privileges` array from the JWT, which a frontend session
 snapshot doesn't expose. See
 [Gate features by role or privilege](/auth/roles/gate-with-flags/) for
 role/privilege targeting specifically.
 
-## Plans on route rules: a different mechanism
+## Every gate is a flag
 
-Bridge Express route rules also declare a `plans` restriction
-(`{ path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] }`):
-privilege-gating with a plan filter, configured centrally, and independent of
-feature flags. Use a flag when you want the switch to be flippable from
-Control Center without touching config; use a route-rule `plans` restriction
-for a static plan boundary baked into the guard. See
+A flag is the only way to gate a route on role, privilege or plan. Route rules
+carry the same flag centrally
+(`{ path: '/premium/*', privilege: 'AUTHENTICATED', featureFlag: 'premium' }`);
+the removed `plans` / `entitlement` rule fields and `bridge.protect({ role })`
+stop the app at startup, naming the flag to use instead. Numbers (how many a
+plan allows) are plan limits, not flags: see
+[Plan limits](../../plan-limits/plan-limits.md) and
 [Route guards](/auth/securing/route-guards/).

@@ -62,8 +62,8 @@ export function createTestApp(config: EnvironmentConfig): Express {
         // Any authenticated user JWT
         { path: '/items', privilege: 'AUTHENTICATED' },
 
-        // Privilege-gated for user JWTs (the user's `privileges` claim must include it)
-        { path: '/reports/*', privilege: 'TENANT_READ' },
+        // Who gets reports is a flag (its rule can say `privileges contains "TENANT_READ"`)
+        { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
       ],
     },
   });
@@ -90,7 +90,7 @@ export function createTestApp(config: EnvironmentConfig): Express {
     });
   });
 
-  // Privilege-gated for user JWTs via config rule (TENANT_READ)
+  // Flag-gated for user JWTs via config rule (featureFlag: 'reports')
   app.get('/reports/summary', (req, res) => {
     res.json({
       report: 'summary',
@@ -98,8 +98,9 @@ export function createTestApp(config: EnvironmentConfig): Express {
     });
   });
 
-  // Role-protected per-route (the @RequireRole analogue — user JWT only)
-  app.get('/admin/users', bridge.protect({ role: 'ADMIN' }), (req, res) => {
+  // Admin area — every gate is a flag (TBP-745): the flag's rule names the
+  // privilege, e.g. `privileges contains "USER_WRITE"`.
+  app.get('/admin/users', bridge.protect({ featureFlag: 'admin-panel' }), (req, res) => {
     res.json({
       users: [],
       requestedBy: req.bridgeUser,

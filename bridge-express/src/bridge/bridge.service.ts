@@ -33,6 +33,7 @@ import { BridgePullCache } from '@nebulr-group/bridge-auth-core';
 import { getTenantId, getTenantUserId } from '@nebulr-group/bridge-auth-core/backend';
 
 import { TenantScope } from './tenant-scope';
+import { verifiedUserTokenFor } from './verified-request';
 
 function decodeJwtSub(jwt: string): string {
   // Best-effort: build a stable cache key from the JWT's tenant/user claims.
@@ -61,6 +62,27 @@ export class BridgeService {
   fromJwt(userJwt: string): TenantScope {
     const cacheKey = decodeJwtSub(userJwt);
     return new TenantScope(userJwt, cacheKey, this.cache, this.apiBaseUrl, this.appId);
+  }
+
+  /**
+   * TBP-745 — a TenantScope for the user `bridge.auth()` / `bridge.protect()`
+   * verified on this request, reusing the token and claims the middleware
+   * already verified. Throws when no user token was verified on this request
+   * (a public route, a route with no auth middleware in front of it, or an
+   * API-token-only caller). Headers and request properties are never read in
+   * its place.
+   */
+  fromRequest(req: unknown): TenantScope {
+    const verified = verifiedUserTokenFor(req);
+    if (!verified) {
+      throw new Error(
+        '[bridge-express] `bridge.fromRequest(req)` needs a request whose user token bridge.auth() or bridge.protect() verified. Put the route behind one of them.',
+      );
+    }
+    const { claims, token } = verified;
+    const tid = claims.tid ?? claims.tenant_id;
+    const cacheKey = tid ? `${tid}:${claims.sub ?? ''}` : claims.sub;
+    return new TenantScope(token, cacheKey, this.cache, this.apiBaseUrl, this.appId);
   }
 
   /**

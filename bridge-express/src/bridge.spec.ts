@@ -42,7 +42,9 @@ describe('createBridge', () => {
   it('bridge.protect() returns a RequestHandler, with or without options', () => {
     const bridge = createBridge(config);
     expect(typeof bridge.protect()).toBe('function');
-    expect(typeof bridge.protect({ role: 'ADMIN' })).toBe('function');
+    expect(typeof bridge.protect({ featureFlag: 'admin-panel' })).toBe('function');
+    // TBP-745 — removed gates fail when the middleware is created.
+    expect(() => bridge.protect({ role: 'ADMIN' } as any)).toThrow(/Every gate is a flag/);
     expect(typeof bridge.protect({ acceptAuth: 'api_token', privilege: 'TENANT_WRITE' })).toBe(
       'function',
     );

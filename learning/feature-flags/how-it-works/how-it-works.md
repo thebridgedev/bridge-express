@@ -47,8 +47,8 @@ only on a positive result, so an outage never accidentally *opens* a gated
 route.
 
 The flip side: for a kill-switch-style route where "flag absent" should mean
-"allow", don't gate the route with the flag directly. Protect it with a normal
-privilege/role rule and check the flag programmatically inside the handler, so
+"allow", don't gate the route with the flag directly. Protect it with plain
+`bridge.protect()` and check the flag programmatically inside the handler, so
 *you* decide the fallback; see
 [Use flags in your logic](/feature-flags/using/in-logic/).
 

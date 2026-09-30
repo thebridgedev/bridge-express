@@ -1,10 +1,10 @@
 # Bridge Express Integration
 
-You are integrating The Bridge into an Express application. This adds JWT-based authentication, tenant context, role and privilege access control, and feature flags to your API.
+You are integrating The Bridge into an Express application. This adds JWT-based authentication, tenant context, flag-based access control, plan limits, and feature flags to your API.
 
 This is a **backend** integration: there are no UI components, no login screen, and no checkout redirect. The frontend (a Bridge frontend plugin — svelte/react/nextjs/angular) handles login and obtains the user's access token; this plugin verifies that token on every request and exposes the verified identity on the Express `req` object for your route handlers.
 
-There is no module system and no dependency injection here. You create a single Bridge instance with a factory at startup and call methods on it — `bridge.auth()`, `bridge.protect(options?)`, `bridge.public()`, `bridge.fromJwt(jwt)`, `bridge.http`.
+There is no module system and no dependency injection here. You create a single Bridge instance with a factory at startup and call methods on it — `bridge.auth()`, `bridge.protect(options?)`, `bridge.public()`, `bridge.requireQuota(metric)`, `bridge.syncQuota(metric)`, `bridge.fromRequest(req)`, `bridge.http`.
 
 ## Prerequisites
 
@@ -58,8 +58,8 @@ import { createBridge } from '@nebulr-group/bridge-express';
 const app = express();
 app.use(express.json());
 
+// appId comes from BRIDGE_APP_ID (apiBaseUrl / debug from BRIDGE_API_BASE_URL / BRIDGE_DEBUG)
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
   guard: {
     defaultAccess: 'protected',
   },
@@ -78,10 +78,11 @@ app.use(bridge.auth());
 **With config from the environment** (the common pattern — no async factory needed, just read `process.env`):
 
 ```ts
+// Explicit options win over the environment; the environment wins over defaults.
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
-  apiBaseUrl: process.env.BRIDGE_API_BASE_URL,        // optional override
-  debug: process.env.BRIDGE_DEBUG === 'true',
+  appId: process.env.MY_BRIDGE_APP_ID,                // only if you name the variable differently
+  apiBaseUrl: 'https://api.thebridge.dev',            // optional override
+  debug: false,                                       // wins over BRIDGE_DEBUG=true
   guard: {
     defaultAccess: 'protected',
   },
@@ -96,7 +97,6 @@ Declare public routes in the `rules` array using `privilege: 'ANONYMOUS'`. This 
 
 ```ts
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
   guard: {
     defaultAccess: 'protected',
     rules: [
@@ -110,13 +110,13 @@ const bridge = createBridge({
 app.use(bridge.auth());
 ```
 
-**RouteRule schema** (`{ path?, graphqlOperation?, privilege, plans? }`):
+**RouteRule schema** (`{ path?, graphqlOperation?, privilege, featureFlag? }`):
 - `path` — REST URL wildcard pattern. `*` matches a path segment: `/cards/*` matches `/cards/123`, `/cards/search`, etc.
 - `graphqlOperation` — reserved for parity with other Bridge plugins. **Per-operation GraphQL guarding is NOT wired in express** (the guard matches on REST path only). Protect a `/graphql` route with `bridge.protect(...)` instead; do not rely on `graphqlOperation` rules.
-- `privilege` — the required `RoutePrivilege` (see below).
-- `plans` — optional plan restriction; the tenant's subscription plan must be in this list.
+- `privilege` — `'ANONYMOUS'` or `'AUTHENTICATED'` (see below).
+- `featureFlag` — the flag that decides who gets the route; its rule says why.
 
-> The rule object carries **privilege and plan only**. There are no `public`, `role`, `featureFlag`, or `methods` fields — role gating is done with `bridge.protect({ role })`, flag gating with `bridge.protect({ featureFlag })`, on the individual route.
+> **Every gate is a flag.** There are no `public`, `role`, `plans`, `entitlement` or `methods` fields. A rule with any of them, or with a privilege key such as `USER_READ`, stops the app at startup with an error naming the flag to use instead.
 
 **Alternative:** the `bridge.public()` middleware marks an individual route public and overrides any rule. Prefer the centralized `rules` config for consistency, and reach for `bridge.public()` when you need a single handler on an otherwise-protected path (e.g. a public `GET` next to a protected `POST` on the same route):
 
@@ -133,12 +133,7 @@ Scan the project's routes to decide what should be public (health checks, public
 ```ts
 type RoutePrivilege =
   | 'ANONYMOUS'      // no authentication required
-  | 'AUTHENTICATED'  // any valid token (user JWT or API token)
-  | 'USER_READ'      // requires USER_READ in the JWT privileges claim
-  | 'USER_WRITE'
-  | 'TENANT_READ'
-  | 'TENANT_WRITE'
-  | string;          // any custom privilege string
+  | 'AUTHENTICATED'; // any valid token (user JWT or API token)
 ```
 
 ```ts
@@ -147,14 +142,15 @@ guard: {
   rules: [
     { path: '/health', privilege: 'ANONYMOUS' },
     { path: '/api/status', privilege: 'AUTHENTICATED' },
-    { path: '/users/*', privilege: 'USER_READ' },
-    { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-    { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
+    // flag rule: privileges contains "USER_READ"
+    { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+    // flag rule: bridge:billing.entitlement.premium eq true
+    { path: '/premium/*', privilege: 'AUTHENTICATED', featureFlag: 'premium' },
   ],
 }
 ```
 
-For user JWTs, a non-`ANONYMOUS`/`AUTHENTICATED` privilege on a matched rule requires that the `privileges` claim include it (403 otherwise).
+Anything finer than "signed in" is a flag. A person the flag's rule leaves out gets `403 FEATURE_NOT_PERMITTED` / `FEATURE_OFF`, or `402 FEATURE_NOT_IN_PLAN` when only an upgrade would turn it on.
 
 ## Access user and tenant context
 
@@ -180,7 +176,7 @@ app.get('/decks', (req: Request, res: Response) => {
 - `fullName`, `givenName`, `familyName`, `locale`
 - `tenantId` — current tenant/workspace ID
 - `appId` — app ID from the token (`aid` claim)
-- `role` — user's role in the current tenant (e.g. `'OWNER'`, `'ADMIN'`, `'USER'`)
+- `role` — user's role in the current tenant (e.g. `'OWNER'`, `'ADMIN'`, `'USER'`); for display, never for gating
 - `privileges` — array of privilege strings (e.g. `['AUTHENTICATED', 'USER_READ']`)
 - `onboarded`, `multiTenantAccess`, `scope`
 
@@ -189,27 +185,24 @@ app.get('/decks', (req: Request, res: Response) => {
 
 **Always scope queries to the verified `tenantId`.** A user's token is only ever valid for their current tenant; never accept a tenant ID from the request body and trust it.
 
-## Role-based access control
+## Access control — every gate is a flag
 
-Use `bridge.protect({ role })` on a route to restrict it to a role. `protect()` always enforces auth, regardless of `defaultAccess`, so it both authenticates and gates in one middleware:
+Who may reach a route is a flag: `bridge.protect({ featureFlag })` on the route (or a rule's `featureFlag`). The flag's rule says why — a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. App code never reads `role`, `privileges` or the plan to decide access. Read the app's real roles and privileges (`list_roles`) before writing a rule, and prefer a privilege rule over a role rule.
 
 ```ts
-app.get('/admin/dashboard', bridge.protect({ role: 'ADMIN' }), (req, res) => {
+// Flag `admin-area`, rule: privileges contains "USER_WRITE"
+app.get('/admin/dashboard', bridge.protect({ featureFlag: 'admin-area' }), (req, res) => {
   res.json({ dashboard: true, by: req.bridgeUser });
-});
-
-app.get('/admin/settings', bridge.protect({ role: 'OWNER' }), (req, res) => {
-  res.json({ settings: true });
 });
 ```
 
-> Roles are **option-only** — they are not expressible in route rules. `role` applies to user-JWT callers only.
+`protect()` always enforces auth, regardless of `defaultAccess`. `bridge.protect({ role })`, `protect({ plans })` and `protect({ entitlement })` were removed and throw at startup, naming the flag to use. Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` and fix every direct check it lists.
 
 ## API tokens and dual auth
 
 The guard accepts two token types: a user JWT via `Authorization: Bearer <token>`, and a server-to-server API token via the `x-api-key` header. When an API token is verified its claims are attached to `req.bridgeApiToken` (`ApiTokenClaims`). Both headers can be present at once — when they are, both contexts coexist on `req`.
 
-- `bridge.protect({ privilege: 'USER_READ' })` — enforce a privilege on **API tokens**. User JWTs bypass this option for backward compatibility (they are governed by route-rule privilege, `role`, and `featureFlag` instead).
+- `bridge.protect({ privilege: 'USER_READ' })` — enforce a privilege on **API tokens**. It is a machine's scope, not a gate on a person: a user JWT is not checked against it (people are gated by flags).
 - `bridge.protect({ acceptAuth: 'jwt' | 'api_token' | 'both' })` — restrict which token type a route accepts. Default is `'both'`.
 
 ```ts
@@ -228,7 +221,7 @@ app.post(
 
 `ApiTokenClaims`: `{ active, sub, appId, tenantId, type, privileges, exp }` — `tenantId` is `null` for app-level tokens.
 
-See **auth-prompt.md** for the full token-verification, privilege, role, and auth-type story.
+See **auth-prompt.md** for the full token-verification, flag, privilege, and auth-type story.
 
 ## GraphQL
 
@@ -246,7 +239,7 @@ Feature flags gate behavior behind a switch you control from the Bridge dashboar
 
 ## Billing and entitlements
 
-Read tenant data (subscription, entitlements, branding) with `bridge.fromJwt(jwt)` and gate features server-side, or use the `plans` field on a route rule. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
+A plan limit is one middleware: `bridge.requireQuota(metric, { current? })` refuses with `402 QUOTA_EXCEEDED` at the limit and records usage after a 2xx; `bridge.syncQuota(metric, { current })` keeps a gauge in step after deletes. A plan feature (yes/no) is a flag ruled on `bridge:billing.entitlement.<key> eq true`. Read tenant data (subscription, entitlements, branding) with `bridge.fromRequest(req)`. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
 
 ## Environment variables
 
@@ -256,11 +249,11 @@ BRIDGE_APP_ID=your-app-id-here
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `BRIDGE_APP_ID` | Yes | — | Your Bridge application ID |
+| `BRIDGE_APP_ID` | Yes, unless `appId` is passed | — | Your Bridge application ID |
 | `BRIDGE_API_BASE_URL` | No | `https://api.thebridge.dev` | Bridge API base URL |
 | `BRIDGE_DEBUG` | No | `false` | Enable debug logging |
 
-Read these in your `createBridge(config)` call (e.g. `appId: process.env.BRIDGE_APP_ID!`).
+`createBridge()` reads these itself when the matching option is not passed; an explicit option wins.
 
 ## Verify the integration
 

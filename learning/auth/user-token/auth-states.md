@@ -19,7 +19,7 @@ A frontend Bridge SDK tracks a single reactive `authState` that walks a signed-i
 | Invalid signature / unknown key / bad issuer or audience | `401`, `error="invalid_token"` | Nothing; handler never runs |
 | API token issued for a different app | `401`, `error="invalid_token"` | Nothing; handler never runs |
 | Wrong credential type for this endpoint (`acceptAuth`) | `401`, `error="invalid_request"` | Nothing; handler never runs |
-| Valid user JWT, but missing required `role` / route-rule `privilege` / `featureFlag` | `403 Forbidden` | `req.bridgeUser` is set even though the handler never runs |
+| Valid user JWT, but the route's `featureFlag` is off for this user | `403 FEATURE_NOT_PERMITTED` / `FEATURE_OFF`, or `402 FEATURE_NOT_IN_PLAN` | `req.bridgeUser` is set even though the handler never runs |
 | Valid API token, but missing required `privilege` | `403 Forbidden` | `req.bridgeApiToken` is set even though the handler never runs |
 | Valid user JWT only | handler runs | `req.bridgeUser`, `req.bridgeTenant`, `req.bridgeAccessToken` set; `req.bridgeApiToken` unset |
 | Valid API token only | handler runs | `req.bridgeApiToken` set; `req.bridgeUser`/`req.bridgeTenant`/`req.bridgeAccessToken` unset |

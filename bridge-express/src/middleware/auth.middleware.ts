@@ -4,6 +4,8 @@ import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services
 import { FeatureFlagService, RequirementVerdict } from '../services/feature-flag.service';
 import { featureRefusalBody } from '../flags/feature-refusal';
 import { BridgeService } from '../bridge/bridge.service';
+import { rememberVerifiedUserToken } from '../bridge/verified-request';
+import { assertProtectOptions } from '../services/bridge-config.service';
 import { transformJwtToBridgeUser } from '../types/user';
 import { transformJwtToBridgeTenant } from '../types/tenant';
 import { FeatureFlagRequirement, RouteRule } from '../types/config';
@@ -59,9 +61,11 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
 
 export interface BridgeMiddlewareOptions {
   /**
-   * Required privilege for API-token callers (the `@RequirePrivilege` analogue).
-   * User JWTs bypass this check — they are governed by `role`/`featureFlag` and
-   * config route-rule privilege instead.
+   * API tokens only: the scope an API token (x-api-key) must carry to call
+   * this route (the `@RequirePrivilege` analogue). It is not a gate on a
+   * person — a signed-in user (Authorization: Bearer) is not checked against
+   * it; gate people with `featureFlag` and a flag rule on a privilege
+   * (`privileges contains "USER_READ"`).
    */
   privilege?: string;
   /**
@@ -69,25 +73,15 @@ export interface BridgeMiddlewareOptions {
    * @default 'both'
    */
   acceptAuth?: AuthType;
-  /** Required role for user-JWT callers (the `@RequireRole` analogue). */
-  role?: string;
-  /** Required feature flag(s) for user-JWT callers (the `@RequireFeatureFlag` analogue). */
+  /**
+   * The flag that decides who gets this route (the `@RequireFeatureFlag`
+   * analogue — user JWT only). The flag's rule says why: a privilege, a plan
+   * feature (`bridge:billing.entitlement.<key> eq true`) or a rollout.
+   *
+   * `role`, `plans`, `entitlement` and `entitlements` were removed in 0.7.0
+   * (every gate is a flag); passing them throws when the middleware is created.
+   */
   featureFlag?: FeatureFlagRequirement;
-  /**
-   * Restrict to these subscription plan slugs (user-JWT callers). Mismatch →
-   * 402 Payment Required (reason `plan_required`).
-   */
-  plans?: string[];
-  /**
-   * Require this entitlement (user-JWT callers). Missing → 402 Payment Required
-   * (reason `entitlement_missing`).
-   */
-  entitlement?: string;
-  /**
-   * Require ALL of these entitlements (user-JWT callers). Missing → 402 Payment
-   * Required (reason `entitlement_missing`).
-   */
-  entitlements?: string[];
 }
 
 /** Shared dependencies threaded through the guard core. */
@@ -102,7 +96,8 @@ interface GuardDeps {
  * Core guard logic shared by `auth()` and `protect()`.
  *
  * Mirrors the bridge-nestjs BridgeAuthGuard: validates JWT bearer tokens / API
- * tokens and enforces privilege, role and feature-flag requirements. The two
+ * tokens and enforces feature-flag requirements (people) and API-token
+ * privileges (machines). The two
  * authentication paths are evaluated **independently** — when both an
  * `x-api-key` and an `Authorization: Bearer` header are present (cloud-views
  * always sends both), both contexts coexist on `request`.
@@ -117,9 +112,7 @@ async function runGuard(
   matchingRule: RouteRule | null,
   options: BridgeMiddlewareOptions,
 ): Promise<boolean> {
-  const { configService, jwksService, featureFlagService, bridgeService } = deps;
-  const path = req.path;
-  const method = req.method;
+  const { configService, jwksService, featureFlagService } = deps;
 
   // 4. Read accepted auth type (default: 'both')
   const acceptedType: AuthType = options.acceptAuth ?? 'both';
@@ -245,6 +238,9 @@ async function runGuard(
     req.bridgeUser = user;
     req.bridgeTenant = tenant || undefined;
     req.bridgeAccessToken = token;
+    // TBP-745 — the only place a verified token is registered for
+    // `bridge.fromRequest(req)` and the quota middleware.
+    rememberVerifiedUserToken(req, token, claims);
 
     configService.log('User authenticated', { userId: user.id, tenantId: user.tenantId });
   }
@@ -260,9 +256,9 @@ async function runGuard(
     return false;
   }
 
-  // 8. API-token privilege check (@RequirePrivilege analogue) — applies when an
-  //    API token is present. User JWTs bypass this; they are governed by route
-  //    privilege, role and feature flag below.
+  // 8. API-token privilege check (@RequirePrivilege analogue) — an API token's
+  //    scope, for machine callers. It is not a gate on a person: user JWTs are
+  //    gated by flags below.
   if (apiTokenClaims) {
     const requiredPrivilege = options.privilege;
     if (requiredPrivilege) {
@@ -279,34 +275,8 @@ async function runGuard(
     }
   }
 
-  // 9. User-JWT-only checks (route-rule privilege, role, feature flag)
+  // 9. User-JWT-only checks: the flag from protect() or the matched route rule.
   if (user) {
-    // Route-rule privilege for user JWT
-    const rulePrivilege = matchingRule?.privilege;
-    if (rulePrivilege && rulePrivilege !== 'ANONYMOUS' && rulePrivilege !== 'AUTHENTICATED') {
-      const userPrivileges = user.privileges ?? [];
-      if (!userPrivileges.includes(rulePrivilege)) {
-        configService.log('Route privilege check failed', {
-          required: rulePrivilege,
-          actual: userPrivileges,
-        });
-        sendForbidden(res, `Privilege '${rulePrivilege}' required`);
-        return false;
-      }
-      configService.log('Route privilege check passed', { privilege: rulePrivilege });
-    }
-
-    // Role requirement (option only) — user JWT only
-    const requiredRole = options.role;
-    if (requiredRole) {
-      if (user.role !== requiredRole) {
-        configService.log('Role check failed', { required: requiredRole, actual: user.role });
-        sendForbidden(res, `Role '${requiredRole}' required`);
-        return false;
-      }
-      configService.log('Role check passed', { role: requiredRole });
-    }
-
     // Feature flag requirement — user JWT only. Sourced from either the
     // protect() option OR the matched config route rule.
     const requiredFlag = options.featureFlag ?? matchingRule?.featureFlag;
@@ -327,60 +297,6 @@ async function runGuard(
         return false;
       }
       configService.log('Feature flag check passed', { flag: requiredFlag });
-    }
-
-    // Plan / entitlement gating (402 Payment Required) — user JWT only.
-    // Sourced from either the protect() options OR the matched route rule.
-    const requiredPlans = options.plans ?? matchingRule?.plans;
-    const requiredEntitlements = resolveEntitlements(options, matchingRule);
-
-    if ((requiredPlans && requiredPlans.length > 0) || requiredEntitlements.length > 0) {
-      if (!token) {
-        // No user JWT to derive the tenant snapshot from → fail closed.
-        configService.log('Plan/entitlement check failed: no user token to resolve tenant');
-        sendPaymentRequired(res, { reason: 'billing_locked' });
-        return false;
-      }
-
-      // Fetch the tenant snapshot once (subscription + entitlements). Any error
-      // (network, non-200, missing data) fails closed → 402 billing_locked.
-      let snapshot;
-      try {
-        snapshot = await bridgeService.fromJwt(token).snapshot();
-      } catch (error) {
-        configService.log('Plan/entitlement snapshot fetch failed — failing closed', { error });
-        sendPaymentRequired(res, { reason: 'billing_locked' });
-        return false;
-      }
-
-      // Plan check
-      if (requiredPlans && requiredPlans.length > 0) {
-        const planSlug = snapshot?.tenant?.subscription?.plan?.slug;
-        if (!planSlug || !requiredPlans.includes(planSlug)) {
-          configService.log('Plan check failed', { required: requiredPlans, actual: planSlug });
-          sendPaymentRequired(res, {
-            reason: 'plan_required',
-            requiredPlan: requiredPlans.join(', '),
-          });
-          return false;
-        }
-        configService.log('Plan check passed', { plan: planSlug });
-      }
-
-      // Entitlement check (ALL required entitlements must be present)
-      if (requiredEntitlements.length > 0) {
-        const entitlements = snapshot?.tenant?.entitlements ?? {};
-        const missing = requiredEntitlements.find((key) => !entitlements[key]);
-        if (missing) {
-          configService.log('Entitlement check failed', { missing });
-          sendPaymentRequired(res, {
-            reason: 'entitlement_missing',
-            requiredEntitlement: missing,
-          });
-          return false;
-        }
-        configService.log('Entitlement check passed', { entitlements: requiredEntitlements });
-      }
     }
   }
 
@@ -404,25 +320,6 @@ function explainFlagFailure(
   } catch {
     return undefined;
   }
-}
-
-/** Merge the `entitlement` (single) and `entitlements` (array) requirement sources. */
-function resolveEntitlements(
-  options: BridgeMiddlewareOptions,
-  matchingRule: RouteRule | null,
-): string[] {
-  const out: string[] = [];
-  const push = (v?: string | string[]) => {
-    if (!v) return;
-    if (Array.isArray(v)) out.push(...v);
-    else out.push(v);
-  };
-  push(options.entitlement);
-  push(options.entitlements);
-  push(matchingRule?.entitlement);
-  push(matchingRule?.entitlements);
-  // Dedupe while preserving order.
-  return [...new Set(out)];
 }
 
 /**
@@ -486,6 +383,8 @@ export function createProtectMiddleware(
   bridgeService: BridgeService,
   options?: BridgeMiddlewareOptions,
 ): RequestHandler {
+  // TBP-745 — removed gates fail at startup, not per request.
+  assertProtectOptions(options);
   const deps: GuardDeps = { configService, jwksService, featureFlagService, bridgeService };
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -531,35 +430,6 @@ function sendForbidden(res: Response, message: string): void {
     error: 'Forbidden',
     message,
   });
-}
-
-/**
- * Reasons a 402 Payment Required can be raised.
- * - `plan_required`       — tenant's plan is not in the allowed set
- * - `entitlement_missing` — a required entitlement is absent
- * - `billing_locked`      — plan/entitlement state could not be determined (fail closed)
- */
-type PaymentRequiredReason = 'plan_required' | 'entitlement_missing' | 'billing_locked';
-
-/**
- * Write a 402 Payment Required response. Dev-friendly body carrying the reason
- * and what was required (no portal/checkout URL — that's auth-core's job).
- */
-function sendPaymentRequired(
-  res: Response,
-  detail: {
-    reason: PaymentRequiredReason;
-    requiredPlan?: string;
-    requiredEntitlement?: string;
-  },
-): void {
-  const body: Record<string, unknown> = {
-    error: 'Payment required',
-    reason: detail.reason,
-  };
-  if (detail.requiredPlan) body.requiredPlan = detail.requiredPlan;
-  if (detail.requiredEntitlement) body.requiredEntitlement = detail.requiredEntitlement;
-  res.status(402).json(body);
 }
 
 /**

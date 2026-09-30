@@ -15,9 +15,11 @@ export class BridgeConfigService {
     manageRoute: string;
   };
 
-  constructor(config: BridgeConfig) {
+  constructor(config: BridgeConfig = {}) {
+    config = resolveBridgeConfig(config);
+    assertRouteRules(config.guard?.rules);
     this.config = {
-      appId: config.appId,
+      appId: config.appId!,
       apiBaseUrl: config.apiBaseUrl || BRIDGE_DEFAULTS.apiBaseUrl,
       debug: config.debug ?? BRIDGE_DEFAULTS.debug,
       guard: config.guard,
@@ -48,8 +50,10 @@ export class BridgeConfigService {
   }
 
   /**
-   * TBP-756 — the subscription page a `402 FEATURE_NOT_IN_PLAN` refusal points
-   * at (its `fix`). `billing.manageRoute`, default `/subscription`.
+   * The subscription page a refused request points at — `fix` in
+   * `402 FEATURE_NOT_IN_PLAN` (TBP-756), `402 QUOTA_EXCEEDED` and
+   * `403 ENTITLEMENT_REQUIRED` (TBP-745). `billing.manageRoute`, default
+   * `/subscription`.
    */
   get manageRoute(): string {
     return this.config.manageRoute;
@@ -140,4 +144,120 @@ export class BridgeConfigService {
       console.log(`[Bridge] ${message}`, ...args);
     }
   }
+}
+
+/**
+ * TBP-745 — fill `appId` / `apiBaseUrl` / `debug` from the environment where
+ * the caller left them out (`BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL`,
+ * `BRIDGE_DEBUG`). Explicit values win, including an explicit `debug: false`
+ * over `BRIDGE_DEBUG=true`. Same precedence as bridge-nestjs `forRoot()`.
+ */
+export function resolveBridgeConfig(
+  config: BridgeConfig = {},
+  env: NodeJS.ProcessEnv = process.env,
+): BridgeConfig & { appId: string } {
+  const appId = config.appId || env.BRIDGE_APP_ID;
+  if (!appId) {
+    throw new Error(
+      '[bridge-express] createBridge() needs an app id: pass `appId` or set BRIDGE_APP_ID.',
+    );
+  }
+  return {
+    ...config,
+    appId,
+    apiBaseUrl: config.apiBaseUrl || env.BRIDGE_API_BASE_URL || undefined,
+    debug: config.debug ?? env.BRIDGE_DEBUG === 'true',
+  };
+}
+
+/**
+ * TBP-745 (the express side of TBP-705) — route rules only say whether a
+ * route needs a signed-in caller; who gets it is a flag. A rule that still
+ * gates on a role, a privilege, a plan or an entitlement fails at startup,
+ * naming the flag setup to use instead, rather than being silently ignored
+ * (which would open the route).
+ */
+export function assertRouteRules(rules: unknown): void {
+  if (!Array.isArray(rules)) return;
+  const problems: string[] = [];
+  rules.forEach((raw, i) => {
+    const rule = (raw ?? {}) as Record<string, unknown>;
+    const where = `guard.rules[${i}]${describeRule(rule)}`;
+    const privilege = rule.privilege;
+    if (privilege !== 'ANONYMOUS' && privilege !== 'AUTHENTICATED') {
+      const named = typeof privilege === 'string' ? privilege : 'USER_WRITE';
+      problems.push(
+        `${where} has privilege: ${JSON.stringify(privilege)}. A route rule's privilege is only 'ANONYMOUS' or 'AUTHENTICATED'. ` +
+          `Use privilege: 'AUTHENTICATED' with featureFlag: '<flag-key>', and give that flag the rule \`privileges contains ${JSON.stringify(named)}\`. ` +
+          `For API-token callers, use bridge.protect({ privilege: ${JSON.stringify(named)} }) on the route (API tokens only).`,
+      );
+    }
+    if ('plans' in rule) {
+      problems.push(
+        `${where} uses \`plans\`, which was removed. Use featureFlag: '<flag-key>' and give that flag a rule on the plan feature it sells: \`bridge:billing.entitlement.<key> eq true\`.`,
+      );
+    }
+    for (const field of ['entitlement', 'entitlements'] as const) {
+      if (field in rule) {
+        problems.push(entitlementProblem(where, field, rule[field]));
+      }
+    }
+    if ('role' in rule || 'roles' in rule) {
+      problems.push(
+        `${where} uses \`${'role' in rule ? 'role' : 'roles'}\`, which route rules do not support. Use featureFlag: '<flag-key>' and give that flag a rule on a privilege (\`privileges contains "USER_WRITE"\`).`,
+      );
+    }
+  });
+  if (problems.length > 0) {
+    throw new Error(
+      `[bridge-express] Every gate is a flag — these route rules gate some other way:\n  - ${problems.join(
+        '\n  - ',
+      )}\nRun "npx @nebulr-group/bridge-cli check gates" to list every direct check.`,
+    );
+  }
+}
+
+/**
+ * TBP-745 — the same check for `bridge.protect(options)`: `role`, `plans`,
+ * `entitlement` and `entitlements` were removed. Thrown when the middleware is
+ * created (at startup), never per request.
+ */
+export function assertProtectOptions(options: unknown): void {
+  if (!options || typeof options !== 'object') return;
+  const opts = options as Record<string, unknown>;
+  const where = 'bridge.protect()';
+  const problems: string[] = [];
+  if ('role' in opts) {
+    problems.push(
+      `${where} uses \`role\`, which was removed. Use bridge.protect({ featureFlag: '<flag-key>' }) and give that flag a rule on a privilege (\`privileges contains "USER_WRITE"\`).`,
+    );
+  }
+  if ('plans' in opts) {
+    problems.push(
+      `${where} uses \`plans\`, which was removed. Use bridge.protect({ featureFlag: '<flag-key>' }) and give that flag a rule on the plan feature it sells: \`bridge:billing.entitlement.<key> eq true\`.`,
+    );
+  }
+  for (const field of ['entitlement', 'entitlements'] as const) {
+    if (field in opts) problems.push(entitlementProblem(where, field, opts[field], true));
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `[bridge-express] Every gate is a flag — ${where} gates some other way:\n  - ${problems.join(
+        '\n  - ',
+      )}\nRun "npx @nebulr-group/bridge-cli check gates" to list every direct check.`,
+    );
+  }
+}
+
+function entitlementProblem(where: string, field: string, value: unknown, protect = false): string {
+  const keys = ([] as unknown[]).concat(value as unknown[]).filter((k) => typeof k === 'string');
+  const key = (keys[0] as string | undefined) ?? '<key>';
+  const use = protect ? `bridge.protect({ featureFlag: '${key}' })` : `featureFlag: '${key}'`;
+  return `${where} uses \`${field}\`, which was removed. Use ${use} and give that flag the rule \`bridge:billing.entitlement.${key} eq true\`.`;
+}
+
+function describeRule(rule: Record<string, unknown>): string {
+  if (typeof rule.path === 'string') return ` (path '${rule.path}')`;
+  if (typeof rule.graphqlOperation === 'string') return ` (graphqlOperation '${rule.graphqlOperation}')`;
+  return '';
 }

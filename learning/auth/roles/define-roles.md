@@ -17,7 +17,7 @@ Roles and privileges are app-level configuration, managed outside your Express b
 
 ## Privileges
 
-There's no CLI command for creating a privilege yet, only for referencing an existing one when you build a role (see below). If a route in your Express app needs a privilege that doesn't exist (referenced from a route rule like `{ path: '/users/*', privilege: 'USER_READ' }` or from `bridge.protect({ privilege })`), create it in Control Center first.
+There's no CLI command for creating a privilege yet, only for referencing an existing one when you build a role (see below). If your Express app needs a privilege that doesn't exist (referenced from a flag rule like `privileges contains "USER_READ"` or from `bridge.protect({ privilege })` for API tokens), create it in Control Center first.
 
 ## Roles
 
@@ -47,6 +47,6 @@ bridge role delete --id <roleId>
 
 ## Why this matters for an Express app
 
-Anything you gate with `bridge.protect({ role: 'SUPPORT' })` or a route rule's `privilege: 'USER_READ'` only works once that role/privilege exists upstream. The middleware doesn't validate that the string you passed corresponds to a real role or privilege; it just compares it against whatever landed in the verified JWT. A typo in `bridge.protect({ role: 'SUPPRT' })` fails silently (nobody will ever have that role) rather than erroring at startup.
+A flag rule such as `privileges contains "USER_READ"` or `user.role eq "SUPPORT"` only matches once that privilege or role exists upstream. Nothing checks that the string corresponds to a real role or privilege; it is compared against whatever landed in the verified JWT. A typo (`user.role eq "SUPPRT"`) fails silently: nobody will ever match it.
 
 **Next:** put your roles to work by assigning them, see [Assign roles to users](/auth/roles/assign-roles/).

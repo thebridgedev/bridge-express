@@ -95,13 +95,13 @@ router.get('/items/from-service-b', async (req, res) => {
 
 `req.bridgeAccessToken` is only set on the user-JWT path (it's the exact bearer token the middleware just verified). This is the backend counterpart to a frontend `tokenStore`, except there's no refreshing to think about: your handler only ever sees a token that has already been validated for *this* request, and you're not responsible for its lifetime.
 
-## Tenant-scoped data beyond the JWT: `bridge.fromJwt()`
+## Tenant-scoped data beyond the JWT: `bridge.fromRequest()`
 
-`req.bridgeTenant` only gives you what's baked into the JWT (id, name, locale, logo, onboarded). For subscription plan, entitlements, or branding, use `bridge.fromJwt(req.bridgeAccessToken!)`, which fetches (and short-TTL-caches) a fuller snapshot for the token's workspace:
+`req.bridgeTenant` only gives you what's baked into the JWT (id, name, locale, logo, onboarded). For subscription plan, entitlements, or branding, use `bridge.fromRequest(req)`, which reuses the token `auth()`/`protect()` verified and fetches (and short-TTL-caches) a fuller snapshot for its workspace:
 
 ```typescript
 router.get('/billing/plan', async (req, res) => {
-  const tenant = bridge.fromJwt(req.bridgeAccessToken!);
+  const tenant = bridge.fromRequest(req);
   res.json(await tenant.subscription);
 });
 ```

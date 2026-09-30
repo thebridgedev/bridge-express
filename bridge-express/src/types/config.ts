@@ -7,20 +7,16 @@ export type FeatureFlagRequirement =
   | { all: string[] };
 
 /**
- * Privilege levels used to protect routes.
- * ANONYMOUS  — no authentication required
- * AUTHENTICATED — any valid JWT (user or API token)
- * USER_READ / USER_WRITE / TENANT_READ / TENANT_WRITE — specific privilege strings
- * that must appear in the user JWT's / API token's `privileges` claim.
+ * Who may reach a route at all.
+ * ANONYMOUS     — no authentication required
+ * AUTHENTICATED — any valid credential (user JWT or API token)
+ *
+ * Anything finer than "signed in" is a flag: set `featureFlag` on the rule
+ * and give the flag a rule on a privilege (`privileges contains "USER_WRITE"`),
+ * a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout.
+ * An API token's scope is `bridge.protect({ privilege })` (API tokens only).
  */
-export type RoutePrivilege =
-  | 'ANONYMOUS'
-  | 'AUTHENTICATED'
-  | 'USER_READ'
-  | 'USER_WRITE'
-  | 'TENANT_READ'
-  | 'TENANT_WRITE'
-  | string;
+export type RoutePrivilege = 'ANONYMOUS' | 'AUTHENTICATED';
 
 /**
  * Route rule for centralized guard configuration.
@@ -31,29 +27,15 @@ export interface RouteRule {
   path?: string;
   /** GraphQL operation name, case-sensitive camelCase (e.g. "listUsers") */
   graphqlOperation?: string;
-  /** Required privilege level for this route */
+  /** Whether the route needs a signed-in caller: 'ANONYMOUS' or 'AUTHENTICATED'. */
   privilege: RoutePrivilege;
   /**
-   * Optional feature-flag requirement — user JWT must have the flag(s) enabled.
-   * Failure → 402 `FEATURE_NOT_IN_PLAN` when an upgrade alone would turn it on,
-   * otherwise 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` (TBP-756).
+   * The flag that decides who gets this route. Evaluated for the request's
+   * user JWT; the flag's rule says why (privilege, plan feature, rollout).
+   * Refuses with 402 `FEATURE_NOT_IN_PLAN` when an upgrade alone would turn it
+   * on, otherwise 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` (TBP-756).
    */
   featureFlag?: FeatureFlagRequirement;
-  /**
-   * Optional plan restriction — the tenant's subscription plan slug must be in
-   * this list. Failure → 402 Payment Required (reason `plan_required`).
-   */
-  plans?: string[];
-  /**
-   * Optional entitlement requirement — the tenant must have this entitlement.
-   * Failure → 402 Payment Required (reason `entitlement_missing`).
-   */
-  entitlement?: string;
-  /**
-   * Optional entitlement requirement — the tenant must have ALL of these
-   * entitlements. Failure → 402 Payment Required (reason `entitlement_missing`).
-   */
-  entitlements?: string[];
 }
 
 /**
@@ -71,14 +53,14 @@ export interface GuardConfig {
  */
 export interface BridgeConfig {
   /**
-   * Your Bridge application ID
-   * @required
+   * Your Bridge application ID.
+   * @default process.env.BRIDGE_APP_ID — required one way or the other
    */
-  appId: string;
+  appId?: string;
 
   /**
    * Base URL for the Bridge API. All endpoints are derived from this.
-   * @default 'https://api.thebridge.dev'
+   * @default process.env.BRIDGE_API_BASE_URL, else 'https://api.thebridge.dev'
    */
   apiBaseUrl?: string;
 
@@ -89,7 +71,7 @@ export interface BridgeConfig {
 
   /**
    * Enable debug logging
-   * @default false
+   * @default process.env.BRIDGE_DEBUG === 'true'
    */
   debug?: boolean;
 
@@ -128,7 +110,8 @@ export interface BridgeConfig {
 export interface BillingConfig {
   /**
    * Route of your app's subscription page. Sent as `fix` in a
-   * `402 FEATURE_NOT_IN_PLAN` refusal so the frontend can link the user
+   * `402 FEATURE_NOT_IN_PLAN` / `402 QUOTA_EXCEEDED` /
+   * `403 ENTITLEMENT_REQUIRED` refusal so the frontend can link the user
    * straight to it.
    * @default '/subscription'
    */

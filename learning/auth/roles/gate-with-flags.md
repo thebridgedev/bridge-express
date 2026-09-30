@@ -28,7 +28,9 @@ or targeting the privilege instead:
 privileges contains "BETA_REPORTS"
 ```
 
-Targeting the role is simpler when the role only ever means one thing. Targeting the privilege scales better if several different roles might eventually need the same access: grant them the privilege instead of duplicating the flag rule per role.
+Prefer the privilege rule: it scales when several roles eventually need the same access (grant them the privilege instead of duplicating the flag rule per role). Write `user.role eq "..."` only when you mean the role itself.
+
+This is the only way to gate a signed-in person in Express: `bridge.protect({ role })` was removed, and every gate is a flag.
 
 ## Enforcing it in Express
 
@@ -40,4 +42,4 @@ router.get('/reports/beta', bridge.protect({ featureFlag: 'beta_reports' }), (re
 });
 ```
 
-This is real server-side enforcement, not just hiding a button: a request that doesn't satisfy the flag rule gets a `403 Forbidden` before your handler runs, regardless of what a caller's frontend shows or hides. Note that the middleware evaluates flags by calling the Bridge flag API, with results cached per token for about 5 minutes, so a flag change can take up to that long to affect requests. Flag evaluation applies to the user-JWT path only; it's not evaluated for API-token callers (see [How roles & privileges work](/auth/roles/how-it-works/) for which checks apply to which credential type).
+This is real server-side enforcement, not just hiding a button: a request that doesn't satisfy the flag rule gets `403 FEATURE_NOT_PERMITTED` before your handler runs, regardless of what a caller's frontend shows or hides. Note that the middleware evaluates flags by calling the Bridge flag API, with results cached per token for about 5 minutes, so a flag change can take up to that long to affect requests. Flag evaluation applies to the user-JWT path only; it's not evaluated for API-token callers (see [How roles & privileges work](/auth/roles/how-it-works/) for which checks apply to which credential type).

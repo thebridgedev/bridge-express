@@ -27,16 +27,14 @@ app.use(bridge.auth());
 
 ### Configuration from environment variables
 
-There's no async-factory ceremony. Read environment variables directly when you build the config:
+`createBridge()` reads `appId`, `apiBaseUrl` and `debug` from the environment when you leave them out. An explicit option always wins (including `debug: false` over `BRIDGE_DEBUG=true`), then the environment, then the default. With no app id either way, `createBridge()` throws at startup.
 
 ```typescript
 import 'dotenv/config';
 import { createBridge } from '@nebulr-group/bridge-express';
 
+// BRIDGE_APP_ID / BRIDGE_API_BASE_URL / BRIDGE_DEBUG fill in what is not passed
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
-  apiBaseUrl: process.env.BRIDGE_API_BASE_URL || undefined,
-  debug: process.env.BRIDGE_DEBUG === 'true',
   guard: {
     defaultAccess: 'protected',
     rules: [{ path: '/health', privilege: 'ANONYMOUS' }],
@@ -59,10 +57,11 @@ BRIDGE_DEBUG=true
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `appId` | `string` | (required) | Your Bridge app ID |
-| `apiBaseUrl` | `string` | `https://api.thebridge.dev` | Base URL for the Bridge API. All other endpoints are derived from this. |
+| `appId` | `string` | `BRIDGE_APP_ID` (one of the two is required) | Your Bridge app ID |
+| `apiBaseUrl` | `string` | `BRIDGE_API_BASE_URL`, else `https://api.thebridge.dev` | Base URL for the Bridge API. All other endpoints are derived from this. |
 | `guard` | `GuardConfig` | (none) | Declarative route rules + default access; see [Route guards](/auth/securing/route-guards/) |
-| `debug` | `boolean` | `false` | Enable debug logging |
+| `debug` | `boolean` | `BRIDGE_DEBUG === 'true'`, else `false` | Enable debug logging |
+| `billing.manageRoute` | `string` | `/subscription` | Your subscription page; sent as `fix` in `402 FEATURE_NOT_IN_PLAN`, `402 QUOTA_EXCEEDED` and `403 ENTITLEMENT_REQUIRED` refusals |
 | `introspectionUrl` | `string` | `{apiBaseUrl}/account/api-token/introspect` | Override the API-token introspection endpoint, for environments where the process reaches Bridge over a private network address that differs from the public `apiBaseUrl` |
 | `introspectionCacheTtlMs` | `number` | `0` | How long (ms) a successful API-token introspection is cached, keyed by token. `0` disables caching, so every request introspects (instant revocation); raise it to trade revocation latency for fewer network calls. |
 | `userJwksUrl` | `string` | `{apiBaseUrl}/auth/.well-known/jwks.json` | Override the JWKS URL for user-JWT verification; same private-network use case as `introspectionUrl` |
@@ -92,29 +91,24 @@ const BRIDGE_DEFAULTS = {
 
 ## Route rules reference
 
-Route rules govern the declarative `bridge.auth()` middleware. Roles and feature flags are applied per route with `bridge.protect(...)`, **not** in route rules; see [Route guards](/auth/securing/route-guards/).
+Route rules govern the declarative `bridge.auth()` middleware; `bridge.protect(...)` never reads them. See [Route guards](/auth/securing/route-guards/).
 
 | Field | Type | Description |
 |---|---|---|
 | `path` | `string` | REST URL wildcard pattern (e.g. `/account/subscription/*`). `*` matches any characters, including `/`. |
 | `graphqlOperation` | `string` | GraphQL operation name. Present on the type for cross-framework parity; **not wired** in the Express plugin. |
-| `privilege` | `RoutePrivilege` (required) | Required privilege level for this route. |
-| `plans` | `string[]` | Declared on the type but **not yet enforced** by the middleware; a matching rule's `plans` list is currently ignored. For plan-based gating that actually blocks requests, use entitlement checks via `bridge.fromJwt(...)` (see [Tenant Data](../../bridge-service/bridge-service.md)). |
+| `privilege` | `RoutePrivilege` (required) | Whether the route needs a signed-in caller. |
+| `featureFlag` | `string \| { any: string[] } \| { all: string[] }` | The flag that decides who gets the route. Its rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. |
 
 ### RoutePrivilege reference
 
 ```typescript
 type RoutePrivilege =
   | 'ANONYMOUS'       // No authentication required
-  | 'AUTHENTICATED'   // Any valid credential (user JWT or API token)
-  | 'USER_READ'       // Requires USER_READ in the user JWT privileges claim
-  | 'USER_WRITE'      // Requires USER_WRITE in the user JWT privileges claim
-  | 'TENANT_READ'     // Requires TENANT_READ in the user JWT privileges claim
-  | 'TENANT_WRITE'    // Requires TENANT_WRITE in the user JWT privileges claim
-  | string;           // Any custom privilege string
+  | 'AUTHENTICATED';  // Any valid credential (user JWT or API token)
 ```
 
-A specific privilege (anything other than `ANONYMOUS` / `AUTHENTICATED`) requires that string to appear in the user JWT's `privileges` claim.
+Anything finer than "signed in" is a flag. A rule with any other privilege string, or with the removed `plans`, `entitlement`, `entitlements` or `role` fields, stops the app at startup with an error naming the flag setup to use instead. An API token's scope is `bridge.protect({ privilege })` on the route (API tokens only).
 
 ### GuardConfig reference
 

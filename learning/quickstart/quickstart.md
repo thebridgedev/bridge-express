@@ -1,6 +1,6 @@
 # Bridge Express Quickstart Guide
 
-Get started with The Bridge Express plugin for backend authentication, privilege-based access control, API token support, and feature flags.
+Get started with The Bridge Express plugin for backend authentication, flag-based access control, plan limits, API token support, and feature flags.
 
 ## Install the plugin
 
@@ -10,7 +10,7 @@ npm install @nebulr-group/bridge-express express
 
 ## Basic setup
 
-Create a single `bridge` instance at startup with your `appId`, then mount its middleware:
+Create a single `bridge` instance at startup, then mount its middleware. Set `BRIDGE_APP_ID` in the environment (or pass `appId`):
 
 ```typescript
 // src/app.ts
@@ -20,18 +20,16 @@ import { createBridge } from '@nebulr-group/bridge-express';
 const app = express();
 app.use(express.json());
 
-const bridge = createBridge({
-  appId: 'YOUR_APP_ID',
-});
+const bridge = createBridge(); // reads BRIDGE_APP_ID / BRIDGE_API_BASE_URL / BRIDGE_DEBUG
 
 app.listen(3000, () => console.log('Server on http://localhost:3000'));
 ```
 
-There are no modules and no dependency injection. `createBridge(config)` returns a `bridge` instance whose methods (`auth()`, `protect()`, `public()`, `fromJwt()`, `http`) you use directly.
+There are no modules and no dependency injection. `createBridge(config)` returns a `bridge` instance whose methods (`auth()`, `protect()`, `public()`, `requireQuota()`, `syncQuota()`, `fromRequest()`, `http`) you use directly. An explicit option always wins over the environment.
 
 ## Global guard with route rules
 
-For most apps, enable the declarative guard with route rules. Mount `bridge.auth()` as app-level middleware. It reads the `guard` config: it protects every route by default (`defaultAccess: 'protected'`) and lets you define exceptions using the `privilege` field:
+For most apps, enable the declarative guard with route rules. Mount `bridge.auth()` as app-level middleware. It reads the `guard` config: it protects every route by default (`defaultAccess: 'protected'`) and lets you define exceptions using the `privilege` field (`'ANONYMOUS'` or `'AUTHENTICATED'`), plus a `featureFlag` that decides who gets a route:
 
 ```typescript
 // src/app.ts
@@ -42,7 +40,6 @@ const app = express();
 app.use(express.json());
 
 const bridge = createBridge({
-  appId: 'YOUR_APP_ID',
   debug: true, // Enable for development
   guard: {
     defaultAccess: 'protected',
@@ -51,9 +48,10 @@ const bridge = createBridge({
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/webhooks/*', privilege: 'ANONYMOUS' },
 
-      // Require specific privileges
-      { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-      { path: '/users/*', privilege: 'USER_READ' },
+      // Who gets these is a flag; its rule says why
+      // (e.g. `privileges contains "TENANT_WRITE"`)
+      { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
+      { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
     ],
   },
 });
@@ -66,7 +64,22 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 All routes are now protected by default, with the exceptions you defined.
 
-> **Note:** Role-based access (`bridge.protect({ role })`) and feature-flag gating (`bridge.protect({ featureFlag })`) are applied per route with `bridge.protect(...)`, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details. The `RouteRule` type also declares a `plans` field, but it is not yet enforced by the middleware; for plan-based gating that actually blocks requests, use entitlement checks (see [Tenant Data](../bridge-service/bridge-service.md)).
+> **Every gate is a flag.** Who may reach a route is a flag, on a route rule or per route with `bridge.protect({ featureFlag })`; the flag's rule names the privilege, plan feature or rollout. App code never checks a role, a privilege or the plan directly. A rule with a privilege key or a `plans` / `entitlement` / `role` field stops the app at startup, naming the flag to use. See the [feature flags documentation](../feature-flags/feature-flags.md). Run `npx @nebulr-group/bridge-cli check gates` before calling the work done.
+
+## Plan limits
+
+A plan limit is one middleware on the route that creates the thing. It refuses with `402 QUOTA_EXCEEDED` at the limit and records usage after a 2xx:
+
+```typescript
+// A gauge: tickets exist, so the app counts them
+app.post('/tickets', bridge.requireQuota('tickets', { current: (t) => db.tickets.count(t.id) }), createTicket);
+app.delete('/tickets/:id', bridge.syncQuota('tickets', { current: (t) => db.tickets.count(t.id) }), deleteTicket);
+
+// A counter: exports happen, so Bridge counts them
+app.post('/exports', bridge.requireQuota('exports'), runExport);
+```
+
+See [Plan limits](../plan-limits/plan-limits.md).
 
 ## Accessing the authenticated user
 
@@ -82,7 +95,7 @@ router.get('/items', (req, res) => {
   const user = req.bridgeUser!;
   console.log('User:', user.email);
   console.log('Tenant:', user.tenantId);
-  console.log('Role:', user.role);
+  console.log('Role:', user.role); // for display; gate with a flag, never on the role
   res.json({ items: [], requestedBy: user.email });
 });
 
@@ -127,7 +140,7 @@ Use `bridge.protect({ privilege })` to require an API token privilege, and `acce
 
 ```typescript
 // Accept both user JWTs and API tokens (default).
-// API tokens must carry USER_READ; user JWTs bypass the privilege option.
+// API tokens must carry USER_READ. `privilege` is API tokens only; a user JWT is not checked against it.
 router.get('/api/users', bridge.protect({ privilege: 'USER_READ' }), (req, res) => {
   const apiToken = req.bridgeApiToken; // set when authenticated via x-api-key
   const user = req.bridgeUser;         // set when authenticated via Bearer token
@@ -153,7 +166,7 @@ You now have backend authentication set up. The middleware will:
 1. Validate user JWTs from `Authorization: Bearer <token>` headers (verified against Bridge's JWKS endpoint)
 2. Validate API tokens from `x-api-key` headers (verified via Bridge token introspection)
 3. Attach user and workspace information to each request (`req.bridgeUser`, `req.bridgeTenant`, `req.bridgeApiToken`)
-4. Enforce privilege, role, and feature flag requirements
+4. Enforce feature flags (people), API-token privileges (machines) and plan limits
 5. Return RFC 6750-compliant 401 responses (with `WWW-Authenticate` headers) and JSON 403 responses on failure
 
-For detailed examples including role-based access, feature flags, API token patterns, and multi-tenancy, see the [examples documentation](../examples/examples.md).
+For detailed examples including flag-gated routes, plan limits, API token patterns, and multi-tenancy, see the [examples documentation](../examples/examples.md).

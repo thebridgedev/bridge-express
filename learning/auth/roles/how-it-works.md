@@ -41,38 +41,40 @@ There is no server-side lookup involved; the middleware never queries a roles da
 
 Notably, the backend sees **more** than a typical frontend does here: a frontend's live snapshot exposes `role` but not the underlying `privileges` array (privileges travel in the JWT, not the frontend session snapshot). Express verifies the JWT itself, so `req.bridgeUser.privileges` is available directly. That's useful if you need finer-grained checks than "does this role match."
 
-## Two separate enforcement mechanisms
+## How roles and privileges are enforced
 
-This is the part that trips people up: **role checks and privilege checks are enforced against different credential types.**
+What a role can do is only true **in the default setup**; every app can change it. Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule.
 
-| Option (on `bridge.protect(...)`) | Applies to | Bypassed by |
+Two mechanisms, for two kinds of caller:
+
+| Mechanism | Applies to | What decides |
 |---|---|---|
-| `role` | User JWT only; checks `req.bridgeUser.role` | API tokens don't carry a `role`, so this option has no effect on API-token-only requests |
-| `privilege` | API token only; checks `req.bridgeApiToken.privileges` | User JWTs bypass this check entirely (so an endpoint that adds `privilege` for API-token enforcement doesn't break existing user-JWT access) |
-| Route-rule `privilege` (e.g. `{ path: '/users/*', privilege: 'USER_READ' }`) | User JWT only; checks `req.bridgeUser.privileges` | Only evaluated when a user JWT is present on the request, and only by `bridge.auth()`; `bridge.protect()` ignores route rules entirely |
+| `bridge.protect({ featureFlag })` (or a route rule's `featureFlag`) | A signed-in person (user JWT) | The flag's rule, e.g. `privileges contains "USER_WRITE"` |
+| `bridge.protect({ privilege })` | API tokens only; checks `req.bridgeApiToken.privileges` | The token's scope. It is not a gate on a person, so a user JWT is not checked against it |
 
-In practice: use `bridge.protect({ role })` (or a route-rule `privilege`) to gate what a **signed-in person** can do, and `bridge.protect({ privilege })` to gate what a **token** (script, integration, CI job) can do. See [API tokens](/auth/api-tokens/) for the full API-token auth flow.
+In practice: gate what a **signed-in person** can do with a flag ruled on a privilege, and scope what a **token** (script, integration, CI job) can do with `bridge.protect({ privilege })`. Prefer a privilege rule over a role rule; write `user.role eq "ADMIN"` only when you mean the role itself. `contains` is exact membership. App code never reads `req.bridgeUser.role` or `privileges` to decide access. See [Gate with feature flags](/auth/roles/gate-with-flags/) and [API tokens](/auth/api-tokens/).
 
 ```typescript
 import { Router } from 'express';
 
 const admin = Router();
-admin.use(bridge.protect({ role: 'ADMIN' })); // every route on this router requires ADMIN
+admin.use(bridge.protect({ featureFlag: 'admin-area' })); // rule: privileges contains "USER_WRITE"
 
 admin.get('/dashboard', (req, res) => {
   res.json({ message: 'Admin dashboard', admin: req.bridgeUser!.email });
 });
 
-app.use('/admin', admin);
-
-// A separate OWNER-only route, gated at the route level
-app.get('/billing/account', bridge.protect({ role: 'OWNER' }), (req, res) => {
+// A stricter route inside the same area
+admin.get('/settings', bridge.protect({ featureFlag: 'admin-settings' }), (req, res) => {
+  // rule: privileges contains "TENANT_WRITE"
   res.json({ settings: 'sensitive data' });
 });
+
+app.use('/admin', admin);
 ```
 
-The role check is an **exact match** against the single role in the token, so don't stack two different `role` requirements on the same route (a router-level `ADMIN` plus a route-level `OWNER` can never both pass; a user has exactly one role per workspace). Give each route one `role` requirement.
+Stacked `protect(...)` calls each run; a request must pass every flag on its path. A refused request gets 403 `FEATURE_NOT_PERMITTED` (or `FEATURE_OFF`) naming the flag, or 402 `FEATURE_NOT_IN_PLAN` when only an upgrade would turn it on.
 
-A `403 Forbidden` with `"Role '<role>' required"` (or `"Privilege '<privilege>' required"`) is returned when the check fails. See [Configuration](/auth/config/) for the response shape.
+`bridge.protect({ role })` was removed: passing it (or a route rule with a privilege key, `role`, `plans` or `entitlement`) stops the app at startup with an error naming the flag to use instead. Run `npx @nebulr-group/bridge-cli check gates` to list every direct role, privilege or plan check left in the code.
 
-For anything security-critical, enforce it here, in `bridge.auth()`/`bridge.protect(...)` on the actual endpoint; never rely on a role check that only exists in a caller's UI.
+For anything that must be enforced (not just hidden in a caller's UI), put the flag on the actual endpoint too; the same rule answers the same way in the browser and the backend.

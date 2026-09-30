@@ -56,7 +56,7 @@ interface BridgeUser {
 }
 ```
 
-The user's `privileges` claim from the JWT is what the route-rule privilege check (below) evaluates against.
+The user's `privileges` claim is what a flag rule such as `privileges contains "USER_WRITE"` evaluates against. App code reads `role` / `privileges` for display, never to decide access; that is a flag (see [Role-based access](#role-based-access-control)).
 
 ### Accessing workspace information
 
@@ -93,10 +93,10 @@ interface BridgeTenant {
 
 ### The raw access token
 
-`req.bridgeAccessToken` holds the raw user JWT string. Use it to forward the token to downstream services (see [Frontend Integration](../frontend-integration/frontend-integration.md)) or to open a tenant scope (see [Tenant Data](../bridge-service/bridge-service.md)):
+`req.bridgeAccessToken` holds the raw user JWT string. Use it to forward the token to downstream services (see [Frontend Integration](../frontend-integration/frontend-integration.md)). To open a tenant scope, use `bridge.fromRequest(req)`, which reuses the token the middleware verified (see [Tenant Data](../bridge-service/bridge-service.md)):
 
 ```typescript
-const tenant = bridge.fromJwt(req.bridgeAccessToken!);
+const tenant = bridge.fromRequest(req);
 ```
 
 ### Declarative vs per-route protection
@@ -130,14 +130,14 @@ app.get('/health', bridge.public(), (_req, res) => {
 
 #### Per-route protection
 
-`bridge.protect(options?)` always enforces auth on the route it's attached to, regardless of `defaultAccess`. It does **not** consult config route rules; its options *are* the rule. Use it to protect a single route, or to apply role / privilege / feature-flag / accepted-auth overrides:
+`bridge.protect(options?)` always enforces auth on the route it's attached to, regardless of `defaultAccess`. It does **not** consult config route rules; its options *are* the rule. Use it to protect a single route, or to apply feature-flag / API-token privilege / accepted-auth overrides:
 
 ```typescript
 // Force auth on one route even if defaultAccess is 'public'
 app.get('/secret', bridge.protect(), handler);
 
-// Require an ADMIN role (user JWT)
-app.delete('/admin/users/:id', bridge.protect({ role: 'ADMIN' }), handler);
+// Who may delete users is a flag (rule: privileges contains "USER_WRITE")
+app.delete('/admin/users/:id', bridge.protect({ featureFlag: 'manage-users' }), handler);
 ```
 
 You can mount `bridge.protect()` on a whole router to protect a group of routes:
@@ -145,8 +145,8 @@ You can mount `bridge.protect()` on a whole router to protect a group of routes:
 ```typescript
 import { Router } from 'express';
 const admin = Router();
-admin.use(bridge.protect({ role: 'ADMIN' }));
-admin.get('/dashboard', handler);  // all admin routes require ADMIN
+admin.use(bridge.protect({ featureFlag: 'admin-area' }));
+admin.get('/dashboard', handler);  // all admin routes need the admin-area flag
 admin.get('/settings', handler);
 app.use('/admin', admin);
 ```
@@ -159,7 +159,7 @@ app.use('/admin', admin);
 
 When an `x-api-key` header carries a JWT-shaped token, Bridge Express verifies it by POSTing it to the Bridge token-introspection endpoint (`{apiBaseUrl}/account/api-token/introspect`). The app never holds the HS256 signing secret; verification is a network call to the Bridge, not a local signature check. The Bridge collapses every rejection (forged, tampered, revoked, expired) into `{ active: false }`. On success, the claims are attached to `req.bridgeApiToken`.
 
-> **User JWTs bypass the `privilege` option.** `bridge.protect({ privilege })` enforces the privilege only for API-token callers. User JWTs are governed by route-rule privilege, `role`, and `featureFlag` instead. This keeps an endpoint that adds a `privilege` option for API tokens from breaking user-JWT access.
+> **`privilege` is API tokens only.** `bridge.protect({ privilege })` is an API token's scope, for machine callers. It is not a gate on a person: a user JWT is not checked against it. Signed-in people are gated with `featureFlag`.
 
 ### ApiTokenClaims type
 
@@ -256,14 +256,14 @@ router.get('/account/profile', bridge.protect({ acceptAuth: 'jwt' }), (req, res)
 
 ## Role-Based Access Control
 
-Roles are enforced per route via the `role` option on `bridge.protect(...)`. Roles are **not** part of route rules.
+**Every gate is a flag.** Who may reach a route is `bridge.protect({ featureFlag })` (or a route rule's `featureFlag`), and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. Prefer a privilege rule over a role rule; write `user.role eq "ADMIN"` only when you mean the role itself.
 
 ```typescript
 import { Router } from 'express';
 const admin = Router();
 
-// Applies to every route on this router
-admin.use(bridge.protect({ role: 'ADMIN' }));
+// Applies to every route on this router. Flag rule: privileges contains "USER_WRITE"
+admin.use(bridge.protect({ featureFlag: 'admin-area' }));
 
 admin.get('/dashboard', (req, res) => {
   res.json({ message: 'Admin dashboard', admin: req.bridgeUser!.email });
@@ -271,14 +271,14 @@ admin.get('/dashboard', (req, res) => {
 
 app.use('/admin', admin);
 
-// A separate OWNER-only route, gated at the route level
-app.get('/billing/account', bridge.protect({ role: 'OWNER' }), (req, res) => {
+// Stricter route. Flag rule: privileges contains "TENANT_WRITE"
+app.get('/billing/account', bridge.protect({ featureFlag: 'manage-billing' }), (req, res) => {
   res.json({ settings: 'sensitive data' });
 });
 ```
 
-The role check compares `req.bridgeUser.role` (from the verified user JWT) against the required role and returns 403 on mismatch. It is an **exact match**, and a user has exactly one role per workspace. That means stacking two different `role` checks on the same route (say, a router-level `ADMIN` plus a route-level `OWNER`) locks everyone out: no token can satisfy both. Keep one `role` requirement per route.
+A refused request gets 403 `FEATURE_NOT_PERMITTED` (or `FEATURE_OFF`) naming the flag, or 402 `FEATURE_NOT_IN_PLAN` when only an upgrade would turn it on. Flags apply to the user-JWT path; scope API-token callers with `privilege`.
 
-The role option applies only to the user-JWT path; API-token callers are unaffected by it.
+The `role`, `plans`, `entitlement` and `entitlements` options were removed: passing one to `bridge.protect(...)`, or putting one on a route rule, stops the app at startup with an error naming the flag to use instead. Run `npx @nebulr-group/bridge-cli check gates` to list every direct role, privilege or plan check left in the code. Numbers (how many tickets a plan allows) are plan limits, not flags: see [Plan limits](../plan-limits/plan-limits.md).
 
 > **A note on GraphQL.** Express has no built-in GraphQL execution context. Protect a `/graphql` route with `bridge.protect(...)` like any other route. Per-operation `graphqlOperation` rules exist in the config type but are **not wired** in the Express plugin. Do not rely on per-operation GraphQL guarding here.

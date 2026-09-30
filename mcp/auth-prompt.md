@@ -30,8 +30,8 @@ The guard inspects **both** headers. When an API token is present it is verified
 **Declarative guard (recommended).** Mount `bridge.auth()` at the app or router level and it runs on every request flowing through it, reading `guard.defaultAccess` and `guard.rules`. Mark exceptions with `bridge.public()` or `privilege: 'ANONYMOUS'` rules.
 
 ```ts
+// appId / apiBaseUrl / debug come from BRIDGE_APP_ID / BRIDGE_API_BASE_URL / BRIDGE_DEBUG
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
   guard: {
     defaultAccess: 'protected',
     rules: [
@@ -43,6 +43,8 @@ const bridge = createBridge({
 
 app.use(bridge.auth());
 ```
+
+A rule's `privilege` is only `'ANONYMOUS'` or `'AUTHENTICATED'`; who gets a route is a `featureFlag` on the rule (Step 3).
 
 **Per-route guard.** If you prefer not to run a declarative guard, apply `bridge.protect()` to the individual routes that need protection. `protect()` always enforces auth (it does not consult `defaultAccess` or config rules — its options *are* the rule):
 
@@ -83,25 +85,24 @@ app.get('/users/me', (req: Request, res: Response) => {
 
 **Always scope queries to the verified `tenantId`.** A user's token is only ever valid for their current tenant; never accept a tenant ID from the request body and trust it.
 
-## Step 3 — Gate by role
+## Step 3 — Gate people with a flag
 
-`bridge.protect({ role })` restricts a route to a role. It applies to **user-JWT callers** only.
+**Every gate is a flag.** Who may reach a route is `bridge.protect({ featureFlag })` (or a route rule's `featureFlag`), and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. App code never reads `req.bridgeUser.role` or `privileges` to decide access. Read the app's real roles and privileges (`list_roles`) before writing a rule, and prefer a privilege rule over a role rule.
 
 ```ts
-app.get('/admin/dashboard', bridge.protect({ role: 'ADMIN' }), (req, res) => {
+// Flag `admin-area`, rule: privileges contains "USER_WRITE"
+app.get('/admin/dashboard', bridge.protect({ featureFlag: 'admin-area' }), (req, res) => {
   res.json({ dashboard: true });
 });
 
-app.get('/admin/settings', bridge.protect({ role: 'OWNER' }), (req, res) => {
-  res.json({ settings: true });
-});
+// Or centrally: { path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' }
 ```
 
-Roles are option-only — there is no `role` field on route rules. A mismatch returns 403.
+A refused person gets `403 FEATURE_NOT_PERMITTED` (or `FEATURE_OFF`), or `402 FEATURE_NOT_IN_PLAN` when only an upgrade would turn it on. `bridge.protect({ role })`, `protect({ plans })`, `protect({ entitlement })` and route rules with a privilege key, `plans`, `entitlement` or `role` were removed: they throw at startup, naming the flag to use. Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` and fix every direct check it lists.
 
 ## Step 4 — Gate API tokens by privilege
 
-`bridge.protect({ privilege })` enforces that the **API token** carries that privilege in its `privileges` claim. User JWTs **bypass** this check for backward compatibility, so an endpoint can require `USER_WRITE` for API-token callers while still serving browser users.
+`bridge.protect({ privilege })` enforces that the **API token** carries that privilege in its `privileges` claim. It is a machine's scope, not a gate on a person: a user JWT is not checked against it, so an endpoint can require `USER_WRITE` for API-token callers while still serving browser users (gate those with a flag).
 
 ```ts
 app.get('/users', bridge.protect({ privilege: 'USER_READ' }), (req, res) => {
@@ -127,7 +128,7 @@ interface ApiTokenClaims {
 }
 ```
 
-> A user JWT, by contrast, is gated by the **route-rule** `privilege` (a non-`ANONYMOUS`/`AUTHENTICATED` privilege on a matched `bridge.auth()` rule must appear in the user's `privileges` claim). The `privilege` *option* on `protect()` targets API tokens; the rule `privilege` targets user JWTs.
+> A user JWT, by contrast, is gated by a flag (Step 3). The `privilege` *option* on `protect()` targets API tokens only.
 
 ## Step 5 — Restrict the accepted auth type
 
@@ -207,7 +208,7 @@ async function authenticateApiToken(apiKey: string) {
 
 ## Error responses
 
-The middleware writes the HTTP response itself (you don't throw and catch): a missing/invalid/expired credential gets `401` with an RFC 6750 `WWW-Authenticate` header; a failed privilege/role/feature-flag check gets `403`. Your handlers only run once the guard has passed, so they can read `req.bridge*` without re-checking.
+The middleware writes the HTTP response itself (you don't throw and catch): a missing/invalid/expired credential gets `401` with an RFC 6750 `WWW-Authenticate` header; a failed API-token privilege check gets `403`; a flag that is off gets `403 FEATURE_NOT_PERMITTED` / `FEATURE_OFF` or `402 FEATURE_NOT_IN_PLAN`. Your handlers only run once the guard has passed, so they can read `req.bridge*` without re-checking.
 
 ## Access-control checklist
 
@@ -215,7 +216,7 @@ The middleware writes the HTTP response itself (you don't throw and catch): a mi
 - [ ] `defaultAccess: 'protected'` so unmatched routes require a token
 - [ ] Public routes declared with `privilege: 'ANONYMOUS'` rules (or `bridge.public()` per-route)
 - [ ] Handlers read identity via `req.bridgeUser` / `req.bridgeTenant`, never trust a tenant ID from the body
-- [ ] Role-gated routes use `bridge.protect({ role })` (option-only, user JWT)
+- [ ] Every person-gate is a flag (`bridge.protect({ featureFlag })` or a rule's `featureFlag`); `npx @nebulr-group/bridge-cli check gates` lists nothing
 - [ ] API-token privilege enforcement via `bridge.protect({ privilege })` where server-to-server access applies
 - [ ] `bridge.protect({ acceptAuth })` set on routes that must reject one credential type
 - [ ] Manual verification (if any) goes through `JwksService` + `TokenVerificationError`
@@ -225,6 +226,6 @@ The middleware writes the HTTP response itself (you don't throw and catch): a mi
 1. **Build:** the project builds with no TypeScript or import errors.
 2. **No token → 401:** a protected route without a credential returns 401 with a `WWW-Authenticate` header.
 3. **Valid JWT → 200:** a protected route with a valid `Authorization: Bearer` returns 200 scoped to the JWT's tenant.
-4. **Role gate:** a `bridge.protect({ role: 'OWNER' })` route returns 403 for a non-owner JWT.
+4. **Flag gate:** a `bridge.protect({ featureFlag: 'admin-area' })` route (rule `privileges contains "USER_WRITE"`) returns 403 `FEATURE_NOT_PERMITTED` for a JWT without that privilege and 200 for one with it.
 5. **Privilege gate:** a `bridge.protect({ acceptAuth: 'api_token', privilege: 'TENANT_WRITE' })` route returns 200 for an API token carrying `TENANT_WRITE`, 401 for a user Bearer token, and 403 for an API token missing the privilege.
 6. **Auth-type restriction:** a `bridge.protect({ acceptAuth: 'jwt' })` route returns 401 when called with only `x-api-key`.
