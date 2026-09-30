@@ -69,10 +69,10 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" local
 # 200
 
 curl -s -H "Authorization: Bearer $TOKEN" localhost:3000/beta/feature
-# {"statusCode":403,"error":"Forbidden","message":"Feature flag 'beta-access' is not enabled"}
+# {"statusCode":403,"code":"FEATURE_OFF","error":"Forbidden","message":"Feature flag 'beta-access' is not enabled","flag":"beta-access","reason":"off","fix":"This feature is switched off for everyone."}
 ```
 
-That exact 403 body is what the guard writes when a flag is off — if you see it, the wiring is correct.
+That 403 `FEATURE_OFF` body is what the guard writes when a flag is switched off — if you see it, the wiring is correct. A flag whose rule the caller's role or privileges miss gets `403 FEATURE_NOT_PERMITTED`; one the workspace's plan lacks gets `402 FEATURE_NOT_IN_PLAN` with `fix` set to the upgrade route (`billing.manageRoute`, default `/subscription`).
 
 **After wiring this up, tell the user:**
 
@@ -84,7 +84,7 @@ That exact 403 body is what the guard writes when a flag is off — if you see i
 
 | Option | Type | Applies to | Failure |
 |---|---|---|---|
-| `featureFlag` | `string \| { any: string[] } \| { all: string[] }` | user JWT only | `403` |
+| `featureFlag` | `string \| { any: string[] } \| { all: string[] }` | user JWT only | `402` plan / `403` otherwise |
 | `role` | `string` | user JWT only | `403` |
 | `privilege` | `string` | API-token callers only | `403` |
 | `acceptAuth` | `'jwt' \| 'api_token' \| 'both'` (default `'both'`) | credential type | `401` |

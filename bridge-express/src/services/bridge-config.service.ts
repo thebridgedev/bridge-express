@@ -12,6 +12,7 @@ export class BridgeConfigService {
     introspectionUrl: string | undefined;
     introspectionCacheTtlMs: number | undefined;
     userJwksUrl: string | undefined;
+    manageRoute: string;
   };
 
   constructor(config: BridgeConfig) {
@@ -23,6 +24,7 @@ export class BridgeConfigService {
       introspectionUrl: config.introspectionUrl,
       introspectionCacheTtlMs: config.introspectionCacheTtlMs,
       userJwksUrl: config.userJwksUrl,
+      manageRoute: config.billing?.manageRoute || BRIDGE_DEFAULTS.manageRoute,
     };
   }
 
@@ -43,6 +45,14 @@ export class BridgeConfigService {
   /** Derived: ${apiBaseUrl}/cloud-views — used for feature flag evaluation */
   get cloudViewsBaseUrl(): string {
     return `${this.config.apiBaseUrl}/cloud-views`;
+  }
+
+  /**
+   * TBP-756 — the subscription page a `402 FEATURE_NOT_IN_PLAN` refusal points
+   * at (its `fix`). `billing.manageRoute`, default `/subscription`.
+   */
+  get manageRoute(): string {
+    return this.config.manageRoute;
   }
 
   get debug(): boolean {

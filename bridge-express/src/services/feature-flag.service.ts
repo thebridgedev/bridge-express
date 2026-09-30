@@ -1,13 +1,29 @@
 import { createHash } from 'crypto';
 import { BridgeConfigService } from './bridge-config.service';
 import { FeatureFlagRequirement } from '../types/config';
+import { readExplanation, type FeatureOffExplanation, type FeatureOffReason } from '../flags/feature-refusal';
 
 interface FlagEvaluation {
   flag: string;
   evaluation?: {
     enabled: boolean;
+    reason?: string;
+    feature?: string;
   };
 }
+
+/**
+ * TBP-756 — a requirement's verdict with the reason. `flag` names the flag the
+ * reason belongs to (for `{any}` / `{all}`, the deciding one).
+ */
+export interface RequirementVerdict {
+  ok: boolean;
+  flag?: string;
+  explanation?: FeatureOffExplanation;
+}
+
+// How close a reason is to "an upgrade alone opens it".
+const REASON_RANK: Record<FeatureOffReason, number> = { plan: 0, permission: 1, rule: 2, off: 3, rollout: 4 };
 
 interface BulkEvaluateResponse {
   flags: FlagEvaluation[];
@@ -18,6 +34,8 @@ interface BulkEvaluateResponse {
  */
 export class FeatureFlagService {
   private cache: Map<string, Map<string, boolean>> = new Map();
+  /** TBP-756 — per token, why each off flag is off (as Bridge said). */
+  private reasons: Map<string, Map<string, FeatureOffExplanation>> = new Map();
   private cacheTimestamps: Map<string, number> = new Map();
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -88,6 +106,63 @@ export class FeatureFlagService {
   }
 
   /**
+   * TBP-756 — why a requirement that `evaluateRequirement` just refused is
+   * off, from the reasons Bridge sent with that evaluation (no extra call):
+   *   - one flag: that flag's reason;
+   *   - `any`: every flag failed; the one closest to "an upgrade alone opens
+   *     it" decides, since opening any one is enough;
+   *   - `all`: of the failing flags, the one furthest from it decides.
+   * A failing flag without a reason leaves the explanation empty.
+   */
+  explainFailure(requirement: FeatureFlagRequirement, accessToken: string): RequirementVerdict {
+    const flags =
+      typeof requirement === 'string'
+        ? [requirement]
+        : 'any' in requirement
+          ? requirement.any
+          : 'all' in requirement
+            ? requirement.all
+            : null;
+    if (!flags) return { ok: true };
+    const cacheKey = this.getCacheKey(accessToken);
+    const isAny = typeof requirement !== 'string' && 'any' in requirement;
+    // A flag counts as failing unless the cache says it is on.
+    const failing = flags.filter((flag) => this.cache.get(cacheKey)?.get(flag) !== true);
+    if (failing.length === 0) return { ok: false };
+
+    let pick: { flag: string; explanation: FeatureOffExplanation & { reason: FeatureOffReason } } | undefined;
+    for (const flag of failing) {
+      const explanation = this.getReason(flag, accessToken);
+      if (!explanation?.reason) return { ok: false, flag: failing[0] };
+      const e = explanation as FeatureOffExplanation & { reason: FeatureOffReason };
+      const better =
+        !pick ||
+        (isAny
+          ? REASON_RANK[e.reason] < REASON_RANK[pick.explanation.reason]
+          : REASON_RANK[e.reason] > REASON_RANK[pick.explanation.reason]);
+      if (better) pick = { flag, explanation: e };
+    }
+    return pick
+      ? { ok: false, flag: pick.flag, explanation: pick.explanation }
+      : { ok: false, flag: failing[0] };
+  }
+
+  /** TBP-756 — why `flag` was off for this token at its last evaluation, if Bridge said. */
+  getReason(flag: string, accessToken: string): FeatureOffExplanation | undefined {
+    return this.reasons.get(this.getCacheKey(accessToken))?.get(flag);
+  }
+
+  private setReason(cacheKey: string, flag: string, explanation: FeatureOffExplanation): void {
+    let map = this.reasons.get(cacheKey);
+    if (!map) {
+      map = new Map();
+      this.reasons.set(cacheKey, map);
+    }
+    if (explanation.reason) map.set(flag, explanation);
+    else map.delete(flag);
+  }
+
+  /**
    * Bulk evaluate all flags for a user
    */
   async bulkEvaluate(accessToken: string): Promise<Map<string, boolean>> {
@@ -124,8 +199,11 @@ export class FeatureFlagService {
       const data: BulkEvaluateResponse = await response.json();
       const flags = new Map<string, boolean>();
 
+      this.reasons.delete(cacheKey);
       for (const { flag, evaluation } of data.flags) {
-        flags.set(flag, evaluation?.enabled ?? false);
+        const enabled = evaluation?.enabled ?? false;
+        flags.set(flag, enabled);
+        if (!enabled) this.setReason(cacheKey, flag, readExplanation(evaluation));
       }
 
       // Update cache
@@ -162,6 +240,7 @@ export class FeatureFlagService {
 
       const data = await response.json();
       const enabled = data.enabled ?? false;
+      this.setReason(this.getCacheKey(accessToken), flag, enabled ? {} : readExplanation(data));
 
       this.configService.log(`Flag '${flag}' evaluated: ${enabled}`);
       return enabled;
@@ -239,5 +318,6 @@ export class FeatureFlagService {
   clearCache(): void {
     this.cache.clear();
     this.cacheTimestamps.clear();
+    this.reasons.clear();
   }
 }

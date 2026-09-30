@@ -15,16 +15,39 @@ router.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req
 });
 ```
 
-A request that doesn't satisfy the flag gets `403 Forbidden` before your
-handler runs. This is real server-side enforcement, not a hidden button:
+A request that doesn't satisfy the flag is refused before your handler runs.
+This is real server-side enforcement, not a hidden button. The refusal says
+why the flag is off, as Bridge's flag evaluation reported it:
+
+| Why the flag is off | Status | `code` | `fix` |
+|---|---|---|---|
+| The workspace's plan doesn't include it: an upgrade alone would turn it on | `402` | `FEATURE_NOT_IN_PLAN` | where to upgrade (`billing.manageRoute`, default `/subscription`) |
+| The person's role or privileges keep it off | `403` | `FEATURE_NOT_PERMITTED` | ask a workspace admin |
+| Switched off, another condition, or outside the rollout | `403` | `FEATURE_OFF` | none |
 
 ```json
 {
   "statusCode": 403,
+  "code": "FEATURE_OFF",
   "error": "Forbidden",
-  "message": "Feature flag 'beta-access' is not enabled"
+  "message": "Feature flag 'beta-access' is not enabled",
+  "flag": "beta-access",
+  "reason": "off",
+  "fix": "This feature is switched off for everyone."
 }
 ```
+
+A plan refusal names the plan feature the flag's rule asks for, when it
+targets one (`bridge:billing.entitlement.<feature>`):
+
+```json
+{ "statusCode": 402, "code": "FEATURE_NOT_IN_PLAN", "flag": "exports_enabled",
+  "feature": "exports", "reason": "plan", "fix": "/subscription",
+  "message": "Your plan does not include 'exports'. Upgrade to use it." }
+```
+
+The 403s keep the old `statusCode` / `error` / `message` fields. Set where a
+402 points with `createBridge({ ..., billing: { manageRoute: '/billing' } })`.
 
 ## Gate a whole router
 
