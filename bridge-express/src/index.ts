@@ -17,6 +17,16 @@ export { BridgeConfigService } from './services/bridge-config.service';
 export { JwksService, TokenVerificationError } from './services/jwks.service';
 export type { ApiTokenClaims } from './services/jwks.service';
 export { FeatureFlagService } from './services/feature-flag.service';
+export type { RequirementVerdict } from './services/feature-flag.service';
+
+// Flag refusals that name the reason (TBP-756)
+export { featureRefusalBody, readExplanation, DEFAULT_MANAGE_ROUTE } from './flags/feature-refusal';
+export type {
+  FeatureOffReason,
+  FeatureOffExplanation,
+  FeatureRefusalBody,
+  FeatureRefusalCode,
+} from './flags/feature-refusal';
 export { BridgeHttpService, BridgeHttpError } from './services/bridge-http.service';
 
 // Types
@@ -26,6 +36,7 @@ export type {
   RouteRule,
   RoutePrivilege,
   FeatureFlagRequirement,
+  BillingConfig,
 } from './types/config';
 export { BRIDGE_DEFAULTS } from './types/config';
 

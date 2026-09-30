@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
-import { FeatureFlagService } from '../services/feature-flag.service';
+import { FeatureFlagService, RequirementVerdict } from '../services/feature-flag.service';
+import { featureRefusalBody } from '../flags/feature-refusal';
 import { BridgeService } from '../bridge/bridge.service';
 import { transformJwtToBridgeUser } from '../types/user';
 import { transformJwtToBridgeTenant } from '../types/tenant';
@@ -307,15 +308,22 @@ async function runGuard(
     }
 
     // Feature flag requirement — user JWT only. Sourced from either the
-    // protect() option OR the matched config route rule (403 on failure).
+    // protect() option OR the matched config route rule.
     const requiredFlag = options.featureFlag ?? matchingRule?.featureFlag;
     if (requiredFlag && token) {
       const flagEnabled = await featureFlagService.evaluateRequirement(requiredFlag, token);
       if (!flagEnabled) {
         const flagName =
           typeof requiredFlag === 'string' ? requiredFlag : JSON.stringify(requiredFlag);
-        configService.log('Feature flag check failed', { flag: flagName });
-        sendForbidden(res, `Feature flag '${flagName}' is not enabled`);
+        const verdict = explainFlagFailure(featureFlagService, requiredFlag, token);
+        configService.log('Feature flag check failed', {
+          flag: flagName,
+          reason: verdict?.explanation?.reason,
+        });
+        // TBP-756 — 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED /
+        // 403 FEATURE_OFF, naming the flag and the fix.
+        const body = featureRefusalBody(flagName, verdict?.explanation, configService.manageRoute);
+        res.status(body.statusCode).json(body);
         return false;
       }
       configService.log('Feature flag check passed', { flag: requiredFlag });
@@ -377,6 +385,25 @@ async function runGuard(
   }
 
   return true;
+}
+
+/**
+ * TBP-756 — why the requirement just refused is off, from the reasons Bridge
+ * sent with that evaluation. Undefined (→ 403 FEATURE_OFF) when the service
+ * cannot say — e.g. a custom FeatureFlagService without `explainFailure`.
+ */
+function explainFlagFailure(
+  featureFlagService: FeatureFlagService,
+  requirement: FeatureFlagRequirement,
+  token: string,
+): RequirementVerdict | undefined {
+  const svc = featureFlagService as Partial<FeatureFlagService>;
+  if (typeof svc.explainFailure !== 'function') return undefined;
+  try {
+    return svc.explainFailure.call(featureFlagService, requirement, token);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Merge the `entitlement` (single) and `entitlements` (array) requirement sources. */

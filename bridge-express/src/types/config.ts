@@ -35,7 +35,8 @@ export interface RouteRule {
   privilege: RoutePrivilege;
   /**
    * Optional feature-flag requirement — user JWT must have the flag(s) enabled.
-   * Failure → 403 Forbidden.
+   * Failure → 402 `FEATURE_NOT_IN_PLAN` when an upgrade alone would turn it on,
+   * otherwise 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` (TBP-756).
    */
   featureFlag?: FeatureFlagRequirement;
   /**
@@ -116,6 +117,22 @@ export interface BridgeConfig {
    * @default {apiBaseUrl}/auth/.well-known/jwks.json
    */
   userJwksUrl?: string;
+
+  /**
+   * Billing settings for refusals (TBP-756).
+   */
+  billing?: BillingConfig;
+}
+
+/** Where a refused request tells the user to go to upgrade. */
+export interface BillingConfig {
+  /**
+   * Route of your app's subscription page. Sent as `fix` in a
+   * `402 FEATURE_NOT_IN_PLAN` refusal so the frontend can link the user
+   * straight to it.
+   * @default '/subscription'
+   */
+  manageRoute?: string;
 }
 
 /**
@@ -123,6 +140,7 @@ export interface BridgeConfig {
  */
 export const BRIDGE_DEFAULTS = {
   apiBaseUrl: 'https://api.thebridge.dev',
+  manageRoute: '/subscription',
   debug: false,
   defaultAccess: 'protected' as const,
 } as const;

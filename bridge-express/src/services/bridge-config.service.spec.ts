@@ -206,4 +206,14 @@ describe('BridgeConfigService', () => {
       spy.mockRestore();
     });
   });
+
+  describe('manageRoute (TBP-756)', () => {
+    it('defaults to /subscription', () => {
+      expect(makeService().manageRoute).toBe('/subscription');
+    });
+
+    it('reads billing.manageRoute', () => {
+      expect(makeService({ billing: { manageRoute: '/billing' } }).manageRoute).toBe('/billing');
+    });
+  });
 });
