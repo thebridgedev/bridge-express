@@ -5,7 +5,8 @@ End-to-end, copy-pasteable examples for the Bridge Express plugin. Every snippet
 - [Authentication and access control](../auth/auth.md)
 - [Configuration](../configuration/configuration.md)
 - [Feature flags](../feature-flags/feature-flags.md)
-- [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md)
+- [Tenant data via `bridge.fromRequest()`](../bridge-service/bridge-service.md)
+- [Plan limits](../plan-limits/plan-limits.md)
 - [Multi-tenancy](../multi-tenancy/multi-tenancy.md)
 - [Frontend integration](../frontend-integration/frontend-integration.md)
 - [Error handling](../error-handling/error-handling.md)
@@ -27,17 +28,16 @@ import { createBridge } from '@nebulr-group/bridge-express';
 const app = express();
 app.use(express.json());
 
+// appId / apiBaseUrl / debug come from BRIDGE_APP_ID / BRIDGE_API_BASE_URL / BRIDGE_DEBUG
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
-  apiBaseUrl: process.env.BRIDGE_API_BASE_URL || undefined,
-  debug: process.env.NODE_ENV === 'development',
   guard: {
     defaultAccess: 'protected',
     rules: [
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/webhooks/*', privilege: 'ANONYMOUS' },
-      { path: '/account/users', privilege: 'USER_READ' },
-      { path: '/reports/*', privilege: 'TENANT_READ' },
+      // Who gets these is a flag; its rule names the privilege
+      { path: '/account/users', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
     ],
   },
 });
@@ -66,21 +66,21 @@ app.get('/me', (req, res) => {
 });
 ```
 
-## 3. Role-based access
+## 3. Admin area: every gate is a flag
 
 ```typescript
 import { Router } from 'express';
 const admin = Router();
 
-// Applies to every route on this router
-admin.use(bridge.protect({ role: 'ADMIN' }));
+// Applies to every route on this router. Flag rule: privileges contains "USER_WRITE"
+admin.use(bridge.protect({ featureFlag: 'admin-area' }));
 
 admin.get('/dashboard', (req, res) => {
   res.json({ message: 'Admin dashboard', admin: req.bridgeUser!.email });
 });
 
-// Tighten one route to OWNER
-admin.get('/settings', bridge.protect({ role: 'OWNER' }), (_req, res) => {
+// Tighten one route. Flag rule: privileges contains "TENANT_WRITE"
+admin.get('/settings', bridge.protect({ featureFlag: 'admin-settings' }), (_req, res) => {
   res.json({ settings: 'sensitive data' });
 });
 
@@ -90,7 +90,7 @@ app.use('/admin', admin);
 ## 4. API tokens, privileges, and accepted auth type
 
 ```typescript
-// Dual-auth (default): API tokens must carry USER_READ; user JWTs bypass the privilege check.
+// Dual-auth (default): API tokens must carry USER_READ. `privilege` is API tokens only.
 app.get('/api/users', bridge.protect({ privilege: 'USER_READ' }), (req, res) => {
   if (req.bridgeApiToken) {
     return res.json({ users: [], via: 'api_token', appId: req.bridgeApiToken.appId });
@@ -121,7 +121,7 @@ app.get('/health', bridge.public(), (_req, res) => {
 ## 6. Feature flags
 
 ```typescript
-// Single flag: 403 when disabled for the requesting user
+// Single flag: 403 FEATURE_NOT_PERMITTED / FEATURE_OFF (or 402 FEATURE_NOT_IN_PLAN) when off
 app.get('/beta/feature', bridge.protect({ featureFlag: 'beta-access' }), (req, res) => {
   res.json({ feature: 'beta-data', user: req.bridgeUser });
 });
@@ -139,23 +139,24 @@ app.get('/pro', bridge.protect({ featureFlag: { any: ['plan-pro', 'plan-enterpri
 
 See [Feature flags](../feature-flags/feature-flags.md) for details.
 
-## 7. Tenant data: subscription and entitlement gating
+## 7. Plan limits and plan features
 
 ```typescript
-app.get('/reports/export', async (req, res) => {
-  const tenant = bridge.fromJwt(req.bridgeAccessToken!);
-
-  if (!(await tenant.entitlements.can('pdf-export'))) {
-    res.status(403).json({ error: 'Forbidden', message: 'Your plan does not include PDF export' });
-    return;
-  }
-
-  const sub = await tenant.subscription; // { plan: { slug, name }, status, endsAt?, gateEngaged? }
-  res.json({ report: 'export', plan: sub.plan.slug });
-});
+// A plan feature is a flag: list `pdf-export` on the plans that sell it and rule
+// the flag `bridge:billing.entitlement.pdf-export eq true`. Without it: 402 FEATURE_NOT_IN_PLAN.
+// How many is the quota: 402 QUOTA_EXCEEDED at the limit, one event recorded after a 2xx.
+app.post(
+  '/reports/export',
+  bridge.protect({ featureFlag: 'pdf-export' }),
+  bridge.requireQuota('exports'),
+  async (req, res) => {
+    const sub = await bridge.fromRequest(req).subscription; // { plan: { slug, name }, status, ... }
+    res.json({ report: 'export', plan: sub.plan.slug });
+  },
+);
 ```
 
-See [Tenant data via `bridge.fromJwt()`](../bridge-service/bridge-service.md) for the full reference.
+See [Plan limits](../plan-limits/plan-limits.md) and [Tenant data](../bridge-service/bridge-service.md) for the full reference.
 
 ## 8. Token forwarding between services
 

@@ -11,8 +11,9 @@ Bridge Feature Flags lets you ship code dark, roll it out to a segment, target
 it at specific users, and kill it instantly, all without a deploy. In Bridge
 Express the switch is enforced **on the server, during the request**:
 `bridge.protect({ featureFlag })` evaluates the flag over the Bridge API
-against the requesting user's access token and returns `403 Forbidden` before
-your handler runs when it isn't enabled. Results are cached per token, so
+against the requesting user's access token and refuses (`403 FEATURE_NOT_PERMITTED`
+/ `FEATURE_OFF`, or `402 FEATURE_NOT_IN_PLAN`) before your handler runs when it
+isn't enabled. Results are cached per token, so
 repeated checks from the same user within the cache window don't re-hit the
 network.
 
@@ -20,6 +21,13 @@ Flags build on auth: evaluation is keyed on the verified user JWT, so it
 applies to the user-JWT path only (not API-token callers), and everything
 Bridge already knows about the caller is available to target on with no app
 code.
+
+**Every gate is a flag.** A route, a button, an endpoint: if some people get
+it and others do not, a flag decides, and its rule says why (a privilege, a
+plan feature, a rollout). App code never reads a role, a privilege list or the
+plan to decide access; `bridge.protect({ role })` and the route-rule `plans` /
+`entitlement` fields were removed. Run `npx @nebulr-group/bridge-cli check gates`
+to list any direct check left.
 
 ## The mental model
 

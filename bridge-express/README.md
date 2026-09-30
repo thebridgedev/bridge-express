@@ -1,8 +1,8 @@
 # @nebulr-group/bridge-express
 
-Bridge authentication and authorization middleware for Express.js.
+Bridge authentication, feature flags and plan limits as Express middleware.
 
-Provides JWT verification (JWKS), role-based access control (RBAC), feature flags, and HTTP token-forwarding — without any NestJS dependency.
+Provides JWT verification (JWKS), API-token verification, flag-gated routes, plan limits (`402 QUOTA_EXCEEDED`), tenant data and HTTP token-forwarding — without any NestJS dependency.
 
 ## Installation
 
@@ -12,7 +12,7 @@ npm install @nebulr-group/bridge-express
 
 **Peer dependencies:**
 ```bash
-npm install express @types/express
+npm install express @types/express @nebulr-group/bridge-auth-core
 ```
 
 ## Quick Start
@@ -22,52 +22,62 @@ import express from 'express';
 import { createBridge } from '@nebulr-group/bridge-express';
 
 const app = express();
+app.use(express.json());
 
+// appId / apiBaseUrl / debug come from BRIDGE_APP_ID / BRIDGE_API_BASE_URL /
+// BRIDGE_DEBUG when you leave them out.
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
   guard: {
     defaultAccess: 'protected',
     rules: [
-      { path: '/health', public: true },
-      { path: '/admin/*', role: 'ADMIN' },
+      { path: '/health', privilege: 'ANONYMOUS' },
+      { path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-panel' },
     ],
   },
 });
 
-// Apply global auth middleware
 app.use(bridge.auth());
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.get('/items', (req, res) => res.json({ user: req.bridgeUser }));
-app.get('/admin/users', (req, res) => res.json({ users: [] }));
+
+// A plan limit: 402 QUOTA_EXCEEDED at the limit, the gauge set after a 2xx.
+app.post(
+  '/tickets',
+  bridge.requireQuota('tickets', { current: (t) => tickets.countFor(t.id) }),
+  (req, res) => res.status(201).json(tickets.create(req.bridgeTenant!.id)),
+);
 
 app.listen(3000);
 ```
 
 ## Configuration
 
-`createBridge(config)` accepts a `BridgeConfig` object:
+`createBridge(config?)` accepts a `BridgeConfig` object. Explicit options win over the environment, which wins over the default.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `appId` | `string` | **required** | Your Bridge application ID |
-| `authBaseUrl` | `string` | `https://auth.nblocks.cloud` | Bridge auth server base URL |
-| `backendlessBaseUrl` | `string` | `https://backendless.nblocks.cloud` | Bridge backendless server base URL |
+| `appId` | `string` | `BRIDGE_APP_ID` (required one way or the other) | Your Bridge application ID |
+| `apiBaseUrl` | `string` | `BRIDGE_API_BASE_URL`, else `https://api.thebridge.dev` | Bridge API base URL; every endpoint is derived from it |
+| `debug` | `boolean` | `BRIDGE_DEBUG === 'true'` | Enable debug logging |
 | `guard.defaultAccess` | `'public' \| 'protected'` | `'protected'` | Default access when no rule matches |
 | `guard.rules` | `RouteRule[]` | `[]` | Route-level access rules |
-| `debug` | `boolean` | `false` | Enable debug logging |
+| `billing.manageRoute` | `string` | `'/subscription'` | Sent as `fix` in `402` / `403` refusals so the frontend can link to your subscription page |
+| `userJwksUrl` / `introspectionUrl` | `string` | derived from `apiBaseUrl` | Overrides for Docker setups |
+| `introspectionCacheTtlMs` | `number` | `0` | Cache successful API-token introspections |
 
 ### Route Rules
 
 ```typescript
 interface RouteRule {
-  path: string;                      // Supports * wildcard
-  public?: boolean;                  // No auth required
-  role?: string;                     // Required role
-  featureFlag?: FeatureFlagRequirement; // Required feature flag(s)
-  methods?: HttpMethod[];            // Limit to specific HTTP methods
+  path?: string;                        // Supports * wildcard
+  graphqlOperation?: string;            // GraphQL operation name
+  privilege: 'ANONYMOUS' | 'AUTHENTICATED';
+  featureFlag?: FeatureFlagRequirement; // The flag that decides who gets the route
 }
 ```
+
+**Every gate is a flag.** A rule says whether the route needs a signed-in caller; who gets it is the flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. A rule that gates on a role, a privilege string, `plans` or `entitlement(s)` fails at startup naming the flag to use instead.
 
 ## Middleware
 
@@ -81,24 +91,24 @@ app.use(bridge.auth());
 
 ### `bridge.protect(options?)` — Per-Route Protection
 
-Always enforces auth. Applies optional role/feature flag overrides:
+Always enforces auth. Optional flag, API-token privilege and accepted credential type:
 
 ```typescript
 // Any authenticated user
 router.get('/profile', bridge.protect(), handler);
 
-// Require specific role
-router.get('/admin', bridge.protect({ role: 'ADMIN' }), handler);
-
-// Require feature flag
+// A flag decides who gets it (user JWTs)
 router.get('/beta', bridge.protect({ featureFlag: 'beta-access' }), handler);
-
-// Require all flags
 router.get('/premium', bridge.protect({ featureFlag: { all: ['premium-tier', 'active'] } }), handler);
-
-// Require any flag
 router.get('/special', bridge.protect({ featureFlag: { any: ['flag-a', 'flag-b'] } }), handler);
+
+// An API token's scope (API tokens only — not a gate on a person)
+router.post('/sync', bridge.protect({ acceptAuth: 'api_token', privilege: 'TENANT_WRITE' }), handler);
 ```
+
+A flag that is off refuses with `402 FEATURE_NOT_IN_PLAN` when an upgrade alone would turn it on, otherwise `403 FEATURE_NOT_PERMITTED` / `FEATURE_OFF`.
+
+`role`, `plans`, `entitlement` and `entitlements` were removed from `protect()` in 0.7.0; passing one throws when the middleware is created. See the CHANGELOG for the migration.
 
 ### `bridge.public()` — Skip Auth
 
@@ -108,6 +118,31 @@ Marks a route as public, bypassing `bridge.auth()`:
 router.get('/health', bridge.public(), handler);
 ```
 
+### Plan limits — `bridge.requireQuota` / `bridge.syncQuota`
+
+Put them after `bridge.auth()` / `bridge.protect()`.
+
+```typescript
+// Gauge (things that exist): your count is compared; after a 2xx the gauge is set to it.
+router.post('/tickets', bridge.requireQuota('tickets', { current: (t) => tickets.countFor(t.id) }), create);
+router.delete('/tickets/:id', bridge.syncQuota('tickets', { current: (t) => tickets.countFor(t.id) }), remove);
+
+// Counter (things that happened): Bridge's tally is compared; one event after a 2xx,
+// deduplicated by the request's Idempotency-Key header.
+router.post('/exports', bridge.protect({ featureFlag: 'exports-enabled' }), bridge.requireQuota('exports'), exportIt);
+```
+
+At the limit the request is refused before the handler runs:
+
+```json
+{ "statusCode": 402, "code": "QUOTA_EXCEEDED", "message": "Your plan allows 5 tickets; 5 are in use.",
+  "metric": "tickets", "used": 5, "limit": 5, "fix": "/subscription" }
+```
+
+Usage is recorded only after a 2xx (a thrown or 4xx/5xx handler records nothing), before the response is released. A `metered` quota never refuses. If the quota cannot be read the request is refused with `503` (fail-closed). `bridge.quota` has the same logic as plain calls (`check`, `assertQuota`, `record`, `sync`, `assertEntitlement`). See [Plan limits](../learning/plan-limits/plan-limits.md).
+
+`bridge.requireEntitlement(key)` refuses with `403 ENTITLEMENT_REQUIRED` unless the plan includes `key` — the exception for when you explicitly want no flag.
+
 ## Request Fields
 
 After successful auth, these fields are available on the request:
@@ -116,7 +151,10 @@ After successful auth, these fields are available on the request:
 req.bridgeUser        // BridgeUser — authenticated user info
 req.bridgeTenant      // BridgeTenant | undefined — tenant info
 req.bridgeAccessToken // string — raw JWT token
+req.bridgeApiToken    // ApiTokenClaims — API-token callers
 ```
+
+`bridge.fromRequest(req)` returns the verified user's tenant view: `subscription`, `entitlements`, `usage`, `branding`, `user`.
 
 ## RFC 6750 WWW-Authenticate Headers
 
@@ -134,48 +172,12 @@ req.bridgeAccessToken // string — raw JWT token
 
 ```typescript
 app.get('/forward/items', async (req, res) => {
-  const data = await bridge.http.get(
-    'http://service-b/items',
-    req.bridgeAccessToken,
-  );
+  const data = await bridge.http.get('http://service-b/items', req.bridgeAccessToken);
   res.json(data);
 });
 ```
 
-Available methods:
-- `bridge.http.get(url, token?, options?)`
-- `bridge.http.post(url, body, token?, options?)`
-- `bridge.http.put(url, body, token?, options?)`
-- `bridge.http.patch(url, body, token?, options?)`
-- `bridge.http.delete(url, token?, options?)`
-
-Throws `BridgeHttpError` (with `.status` and `.url`) on non-2xx responses.
-
-## Feature Flags
-
-Feature flags are evaluated via the Bridge backendless API with a 5-minute cache.
-
-```typescript
-// Single flag
-bridge.protect({ featureFlag: 'beta-access' })
-
-// All flags must be enabled
-bridge.protect({ featureFlag: { all: ['premium-tier', 'active-subscription'] } })
-
-// Any flag must be enabled
-bridge.protect({ featureFlag: { any: ['flag-a', 'flag-b'] } })
-```
-
-## TypeScript
-
-The package extends Express's `Request` type automatically:
-
-```typescript
-// Available after bridge.auth() or bridge.protect()
-req.bridgeUser        // BridgeUser | undefined
-req.bridgeTenant      // BridgeTenant | undefined
-req.bridgeAccessToken // string | undefined
-```
+Available methods: `get`, `post`, `put`, `patch`, `delete`. Throws `BridgeHttpError` (with `.status` and `.url`) on non-2xx responses.
 
 ## License
 

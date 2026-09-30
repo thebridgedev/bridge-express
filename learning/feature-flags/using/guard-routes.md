@@ -95,36 +95,40 @@ type FeatureFlagRequirement =
 `any` passes if at least one flag is enabled; `all` passes only if every flag
 is. Each key is evaluated against the same access token.
 
-## Combine with role and privilege on one route
+## Role, privilege and plan go in the flag's rule
 
-`featureFlag` composes with the other `bridge.protect(...)` options; they're
-all checked in the same middleware. A route can require a role *and* a flag:
+Who may use a route is one flag; the flag's rule says why. For "admins, and
+only while the beta runs", rule `beta_reports` on
+`privileges contains "USER_WRITE"` plus the rollout, rather than adding a
+second check in code:
 
 ```typescript
 router.get(
   '/reports/beta',
-  bridge.protect({ role: 'ADMIN', featureFlag: 'beta_reports' }),
+  bridge.protect({ featureFlag: 'beta_reports' }),
   (req, res) => {
     res.json({ report: buildBetaReport(req.bridgeUser!.tenantId) });
   },
 );
 ```
 
-The role check runs against the user JWT's `role`, the flag against the same
-token. See [Route guards](/auth/securing/route-guards/) for the full order of
+`bridge.protect({ role })` was removed (it throws at startup, naming the flag
+to use). See [Route guards](/auth/securing/route-guards/) for the full order of
 checks, and [Gate features by role or privilege](/auth/roles/gate-with-flags/)
 for role/privilege targeting of the flag rule itself.
 
-> **Feature flags aren't route rules.** Unlike privilege, which you can list
-> centrally in `guard.rules`, a `featureFlag` requirement lives only on
-> `bridge.protect(...)`. Declare it on the route or router, not in the guard
-> config.
+A flag can also go centrally on a route rule under `bridge.auth()`:
+`{ path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' }`.
+
+Who may use a feature is the flag; how many is the quota. A route can carry
+both: `bridge.protect({ featureFlag: 'exports-enabled' })` then
+`bridge.requireQuota('exports')`. See [Plan limits](../../plan-limits/plan-limits.md).
 
 ## When the flag is unreachable
 
 Flag evaluation is satisfied only on a positive result. If the Bridge API is
 unreachable, the requirement is treated as not satisfied and the route returns
 `403`. For a kill-switch-style route where the flag being absent should mean
-"allow", gate the route with a normal privilege/role rule and check the flag
+"allow", protect the route without the flag (`bridge.protect()`) and check the flag
 programmatically inside the handler instead, so you control the fallback; see
 [Use flags in your logic](/feature-flags/using/in-logic/).

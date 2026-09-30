@@ -6,18 +6,25 @@ Bridge Express is configured with a single `createBridge(config)` call at startu
 
 ```typescript
 interface BridgeConfig {
-  /** Your Bridge application ID (required) */
-  appId: string;
+  /** Your Bridge application ID.
+   *  @default process.env.BRIDGE_APP_ID (one of the two is required) */
+  appId?: string;
 
   /** Base URL for the Bridge API. All endpoints are derived from this.
-   *  @default 'https://api.thebridge.dev' */
+   *  @default process.env.BRIDGE_API_BASE_URL, else 'https://api.thebridge.dev' */
   apiBaseUrl?: string;
 
   /** Guard configuration (declarative route rules + default access) */
   guard?: GuardConfig;
 
-  /** Enable debug logging (default: false) */
+  /** Enable debug logging.
+   *  @default process.env.BRIDGE_DEBUG === 'true' */
   debug?: boolean;
+
+  /** Where a refused request tells the user to upgrade: `fix` in
+   *  402 FEATURE_NOT_IN_PLAN / 402 QUOTA_EXCEEDED / 403 ENTITLEMENT_REQUIRED.
+   *  @default { manageRoute: '/subscription' } */
+  billing?: { manageRoute?: string };
 
   /** Override the token-introspection URL for API token verification.
    *  API tokens are signed with a per-app HS256 secret this app never holds,
@@ -70,16 +77,13 @@ const bridge = createBridge({
 
 ### Configuration from environment variables
 
-There's no async-factory ceremony. Read environment variables directly when you build the config:
+`createBridge()` fills `appId`, `apiBaseUrl` and `debug` from the environment when you leave them out. An explicit option wins (including `debug: false` over `BRIDGE_DEBUG=true`), then the environment, then the default. With no app id either way, `createBridge()` throws at startup.
 
 ```typescript
 import 'dotenv/config';
 import { createBridge } from '@nebulr-group/bridge-express';
 
 const bridge = createBridge({
-  appId: process.env.BRIDGE_APP_ID!,
-  apiBaseUrl: process.env.BRIDGE_API_BASE_URL || undefined,
-  debug: process.env.BRIDGE_DEBUG === 'true',
   guard: {
     defaultAccess: 'protected',
     rules: [
@@ -104,7 +108,7 @@ BRIDGE_DEBUG=true
 
 ### Route rules reference
 
-Route rules govern the declarative `bridge.auth()` middleware. Each rule uses the `privilege` field to control access. Roles and feature flags are applied per route with `bridge.protect(...)`, **not** in route rules.
+Route rules govern the declarative `bridge.auth()` middleware; `bridge.protect(...)` never reads them. A rule says whether a route needs a signed-in caller, and which flag decides who gets it.
 
 ```typescript
 interface RouteRule {
@@ -115,17 +119,18 @@ interface RouteRule {
    *  Reserved; NOT wired in the Express plugin. */
   graphqlOperation?: string;
 
-  /** Required privilege level for this route */
+  /** Whether the route needs a signed-in caller */
   privilege: RoutePrivilege;
 
-  /** Optional plan restriction; declared but NOT enforced yet (see below) */
-  plans?: string[];
+  /** The flag that decides who gets this route. Its rule says why:
+   *  a privilege, a plan feature or a rollout. */
+  featureFlag?: FeatureFlagRequirement; // string | { any: string[] } | { all: string[] }
 }
 ```
 
 > **GraphQL operation rules are not wired in Express.** The `graphqlOperation` field exists in the type for cross-framework parity, but the Express plugin matches REST `path` patterns only. To protect a GraphQL endpoint, attach `bridge.protect(...)` to the `/graphql` route.
 
-> **`plans` is not enforced yet.** The field is declared on the type, but the middleware currently ignores it; a rule with `plans` does not restrict access by subscription plan. For plan-based gating that actually blocks requests, use entitlement checks via `bridge.fromJwt(...)`; see [Tenant Data](../bridge-service/bridge-service.md).
+> **Every gate is a flag.** A rule with any privilege other than `ANONYMOUS` / `AUTHENTICATED`, or with the removed `plans`, `entitlement`, `entitlements` or `role` fields, stops the app at startup with an error naming the flag setup to use instead. Plan limits (numbers) are separate middleware: see [Plan limits](../plan-limits/plan-limits.md).
 
 Path patterns support the `*` wildcard, which matches any characters (including `/`). For example `/reports/*` matches `/reports/summary` and `/reports/2024/q1`.
 
@@ -144,9 +149,10 @@ const bridge = createBridge({
       // Any valid token (user JWT or API token)
       { path: '/api/status', privilege: 'AUTHENTICATED' },
 
-      // Require a specific privilege in the user JWT
-      { path: '/users/*', privilege: 'USER_READ' },
-      { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
+      // Who gets these is a flag; its rule names the privilege
+      // (e.g. `privileges contains "USER_READ"`)
+      { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
     ],
   },
 });
@@ -157,15 +163,10 @@ const bridge = createBridge({
 ```typescript
 type RoutePrivilege =
   | 'ANONYMOUS'       // No authentication required
-  | 'AUTHENTICATED'   // Any valid credential (user JWT or API token)
-  | 'USER_READ'       // Requires USER_READ in the user JWT privileges claim
-  | 'USER_WRITE'      // Requires USER_WRITE in the user JWT privileges claim
-  | 'TENANT_READ'     // Requires TENANT_READ in the user JWT privileges claim
-  | 'TENANT_WRITE'    // Requires TENANT_WRITE in the user JWT privileges claim
-  | string;           // Any custom privilege string
+  | 'AUTHENTICATED';  // Any valid credential (user JWT or API token)
 ```
 
-A specific privilege (anything other than `ANONYMOUS` / `AUTHENTICATED`) requires that string to appear in the user JWT's `privileges` claim.
+Anything finer than "signed in" is a flag with a rule on a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout. An API token's scope is `bridge.protect({ privilege })` (API tokens only).
 
 ### GuardConfig type reference
 

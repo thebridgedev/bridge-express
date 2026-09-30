@@ -31,12 +31,12 @@ Two different caches sit under the two verification paths, and they're tuned for
 
 Neither cache affects how fresh `req.bridgeUser`/`req.bridgeApiToken` are for a given request; they only affect how the *verification itself* is performed. See [Configuration](/auth/config/) for how to set `introspectionCacheTtlMs`.
 
-## Tenant data beyond the JWT (`bridge.fromJwt(...)`): pull, not push
+## Tenant data beyond the JWT (`bridge.fromRequest(req)`): pull, not push
 
-Subscription, entitlements, and branding aren't in the JWT at all. `bridge.fromJwt(req.bridgeAccessToken!)` fetches them over REST (`GET /session/init`) and caches the result briefly (~30s default) so concurrent requests for the same user share one round-trip:
+Subscription, entitlements, and branding aren't in the JWT at all. `bridge.fromRequest(req)` fetches them over REST (`GET /session/init`) and caches the result briefly (~30s default) so concurrent requests for the same user share one round-trip:
 
 ```typescript
-const tenant = bridge.fromJwt(req.bridgeAccessToken!);
+const tenant = bridge.fromRequest(req);
 const sub = await tenant.subscription; // may be up to ~30s stale
 ```
 

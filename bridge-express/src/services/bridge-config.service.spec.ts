@@ -1,4 +1,8 @@
-import { BridgeConfigService } from './bridge-config.service';
+import {
+  BridgeConfigService,
+  assertRouteRules,
+  resolveBridgeConfig,
+} from './bridge-config.service';
 import { BRIDGE_DEFAULTS } from '../types/config';
 
 function makeService(overrides: Record<string, any> = {}): BridgeConfigService {
@@ -94,7 +98,7 @@ describe('BridgeConfigService', () => {
   describe('findMatchingRule (REST path matching)', () => {
     const rules = [
       { path: '/health', privilege: 'ANONYMOUS' },
-      { path: '/admin/*', privilege: 'TENANT_WRITE' },
+      { path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-panel' },
       { path: '/items', privilege: 'AUTHENTICATED' },
     ];
     let svc: BridgeConfigService;
@@ -133,7 +137,7 @@ describe('BridgeConfigService', () => {
       svc = makeService({
         guard: {
           rules: [
-            { graphqlOperation: 'listUsers', privilege: 'TENANT_READ' },
+            { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED' },
             { path: '/health', privilege: 'ANONYMOUS' },
           ],
         },
@@ -214,6 +218,97 @@ describe('BridgeConfigService', () => {
 
     it('reads billing.manageRoute', () => {
       expect(makeService({ billing: { manageRoute: '/billing' } }).manageRoute).toBe('/billing');
+    });
+  });
+
+  // TBP-745 — the express side of bridge-nestjs TBP-705: every gate is a flag.
+  describe('route rules gate only on signed-in-or-not (fail at startup otherwise)', () => {
+    it('accepts ANONYMOUS / AUTHENTICATED rules with or without a featureFlag', () => {
+      expect(() =>
+        makeService({
+          guard: {
+            rules: [
+              { path: '/health', privilege: 'ANONYMOUS' },
+              { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
+            ],
+          },
+        }),
+      ).not.toThrow();
+    });
+
+    it('refuses a privilege rule, naming the flag rule and the API-token alternative', () => {
+      expect(() =>
+        makeService({ guard: { rules: [{ path: '/reports/*', privilege: 'TENANT_READ' }] } }),
+      ).toThrow(
+        /guard\.rules\[0\] \(path '\/reports\/\*'\) has privilege: "TENANT_READ".*privileges contains "TENANT_READ".*bridge\.protect\(\{ privilege: "TENANT_READ" \}\)/s,
+      );
+    });
+
+    it('refuses plans, entitlement(s) and role on a rule, listing every problem at once', () => {
+      let message = '';
+      try {
+        assertRouteRules([
+          { path: '/a', privilege: 'AUTHENTICATED', plans: ['pro'] },
+          { path: '/b', privilege: 'AUTHENTICATED', entitlement: 'export' },
+          { path: '/c', privilege: 'AUTHENTICATED', entitlements: ['sso'] },
+          { graphqlOperation: 'op', privilege: 'AUTHENTICATED', role: 'ADMIN' },
+        ]);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/^\[bridge-express\] Every gate is a flag/);
+      expect(message).toContain("guard.rules[0] (path '/a') uses `plans`, which was removed");
+      expect(message).toContain("featureFlag: 'export'");
+      expect(message).toContain('bridge:billing.entitlement.export eq true');
+      expect(message).toContain("guard.rules[2] (path '/c') uses `entitlements`");
+      expect(message).toContain("guard.rules[3] (graphqlOperation 'op') uses `role`");
+      expect(message).toContain('npx @nebulr-group/bridge-cli check gates');
+    });
+  });
+
+  describe('settings from the environment when none are given (TBP-745)', () => {
+    const env = {
+      BRIDGE_APP_ID: 'env-app',
+      BRIDGE_API_BASE_URL: 'https://api.env.test',
+      BRIDGE_DEBUG: 'true',
+    };
+
+    it('fills appId, apiBaseUrl and debug from the environment', () => {
+      expect(resolveBridgeConfig({}, env)).toMatchObject({
+        appId: 'env-app',
+        apiBaseUrl: 'https://api.env.test',
+        debug: true,
+      });
+    });
+
+    it('an explicit value wins over the environment, including debug: false', () => {
+      expect(
+        resolveBridgeConfig({ appId: 'mine', apiBaseUrl: 'https://mine.test', debug: false }, env),
+      ).toMatchObject({ appId: 'mine', apiBaseUrl: 'https://mine.test', debug: false });
+    });
+
+    it('keeps the rest of the config (guard, billing) untouched', () => {
+      const guard = { defaultAccess: 'public' as const };
+      const billing = { manageRoute: '/billing' };
+      expect(resolveBridgeConfig({ guard, billing }, env)).toMatchObject({ guard, billing });
+    });
+
+    it('refuses to start without an app id either way', () => {
+      expect(() => resolveBridgeConfig({}, {})).toThrow(/pass `appId` or set BRIDGE_APP_ID/);
+    });
+
+    it('BridgeConfigService with no config boots from process.env', () => {
+      const saved = { ...process.env };
+      Object.assign(process.env, env);
+      try {
+        const svc = new BridgeConfigService();
+        expect(svc.appId).toBe('env-app');
+        expect(svc.apiBaseUrl).toBe('https://api.env.test');
+        expect(svc.debug).toBe(true);
+      } finally {
+        for (const k of Object.keys(env)) delete process.env[k];
+        Object.assign(process.env, saved);
+      }
     });
   });
 });

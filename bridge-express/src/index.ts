@@ -10,10 +10,33 @@ export type {
   UserSnapshot,
   SessionSnapshotData,
   TenantEntitlementsView,
+  TenantUsageView,
+  QuotaSnapshot,
 } from './bridge';
 
+// Plan limits and entitlements (TBP-745)
+export {
+  BridgeQuotaService,
+  BridgeRefusalError,
+  QuotaExceededError,
+  EntitlementRequiredError,
+  USAGE_COUNTED_HEADER,
+} from './quota';
+export type {
+  QuotaTenant,
+  QuotaCounter,
+  RequireQuotaOptions,
+  SyncQuotaOptions,
+  QuotaExceededBody,
+  EntitlementRequiredBody,
+  QuotaCount,
+  QuotaCheckOptions,
+  QuotaDecision,
+  QuotaRecordOptions,
+} from './quota';
+
 // Services
-export { BridgeConfigService } from './services/bridge-config.service';
+export { BridgeConfigService, resolveBridgeConfig } from './services/bridge-config.service';
 export { JwksService, TokenVerificationError } from './services/jwks.service';
 export type { ApiTokenClaims } from './services/jwks.service';
 export { FeatureFlagService } from './services/feature-flag.service';

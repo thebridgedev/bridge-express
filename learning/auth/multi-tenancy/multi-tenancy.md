@@ -173,4 +173,4 @@ async function ensureTenant(tenantId: string, tenantName: string): Promise<Tenan
 
 ## Workspace-scoped data beyond the JWT
 
-For subscription plan, entitlements, and branding (none of which are in the JWT), use `bridge.fromJwt(req.bridgeAccessToken!)` rather than hand-rolling REST calls. See [Tenant Data](../../bridge-service/bridge-service.md) for the full reference and [How the token is kept current](/auth/user-token/object-updates/) for its caching behavior.
+For subscription plan, entitlements, and branding (none of which are in the JWT), use `bridge.fromRequest(req)` rather than hand-rolling REST calls. See [Tenant Data](../../bridge-service/bridge-service.md) for the full reference and [How the token is kept current](/auth/user-token/object-updates/) for its caching behavior.

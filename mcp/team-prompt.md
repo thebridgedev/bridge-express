@@ -11,7 +11,7 @@ If you are looking for `listMembers()`, `inviteUser()`, `updateRole()` or a team
 | A UI to list, invite, remove or re-role members | The **frontend** Bridge plugin — `TeamManagementPanel` in svelte / react / nextjs |
 | Programmatic member CRUD from a script or backend job | The **Bridge management API**, via MCP tools or `bridge user …` / `bridge tenant …` on the CLI |
 | Know which workspace the current request belongs to | This plugin — `req.bridgeTenant` |
-| Gate a route on the caller's role | This plugin — `bridge.protect({ role })` |
+| Gate a route on who the caller is | This plugin — `bridge.protect({ featureFlag })`, the flag ruled on a privilege |
 | Store your own per-workspace data | Your database, keyed by `req.bridgeTenant.id` |
 
 The split is not arbitrary. Team membership is Bridge platform state owned by bridge-api. A backend plugin that also mutated it would be a second writer to someone else's data, with its own cache and its own idea of what a role means.
@@ -37,18 +37,19 @@ Both come from the verified JWT — no extra network call, and unspoofable witho
 
 > **Scope by `tenant.id`, always.** A missing tenant filter is the most damaging bug available in a multi-tenant backend, and it is invisible while you are testing with one workspace. If a query cannot be scoped, be able to say why.
 
-### Gating on role
+### Gating who may do it — a flag
 
 ```ts
-app.delete('/workspace/members/:id', bridge.protect({ role: 'OWNER' }), (req, res) => {
+// Flag `manage-members`, rule: privileges contains "USER_WRITE"
+app.delete('/workspace/members/:id', bridge.protect({ featureFlag: 'manage-members' }), (req, res) => {
   // Your own logic. Removing the member from BRIDGE is a management-API call,
   // not something this plugin can do.
 });
 ```
 
-`bridge.protect({ role })` applies to user-JWT callers only. For API-token callers, branch on `req.bridgeApiToken` and check its privileges — see `auth-prompt.md`.
+Every gate is a flag: app code never reads a role or a privilege list to decide access, and `bridge.protect({ role })` was removed (it throws at startup, naming the flag to use). Rule the flag on a privilege rather than a role — privileges survive a role rename. For API-token callers, use `bridge.protect({ privilege })` (API tokens only) — see `auth-prompt.md`.
 
-Prefer privileges over roles where the SDK offers both: privileges survive a role rename.
+Seats are a plan limit, not a flag: `bridge.requireQuota('seats')` on your own invite handler checks the limit (Bridge counts members itself).
 
 ## Managing members for real
 

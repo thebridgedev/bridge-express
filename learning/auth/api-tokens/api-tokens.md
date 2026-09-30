@@ -43,7 +43,7 @@ interface ApiTokenClaims {
 
 ## Requiring a privilege
 
-Pass `privilege` to `bridge.protect(...)` to require that an API token carries a specific privilege. **User JWTs bypass this option entirely.** It only applies to the API-token path, so adding a `privilege` requirement to an endpoint doesn't break existing user-JWT access:
+Pass `privilege` to `bridge.protect(...)` to require that an API token carries a specific privilege. It is an API token's scope, not a gate on a person: a user JWT is not checked against it (gate signed-in people with `featureFlag`), so adding a `privilege` requirement to an endpoint doesn't break user-JWT access:
 
 ```typescript
 // API tokens must carry USER_READ; user JWTs are unaffected.
