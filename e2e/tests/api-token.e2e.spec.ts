@@ -62,22 +62,56 @@ function buildApiTokenApp(config: EnvironmentConfig): Express {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: create an API token via the bridge-api
+// Helper: the app's own API key
+//
+// Minting an API token is app administration. Since TBP-771 bridge-api refuses
+// a person's sign-in session on those routes ("App administration requires the
+// app's API key or the Bridge dashboard; a user session is not accepted") and
+// admits only a server-side credential: the app's API key as `x-api-key`, or
+// the dashboard's internal service token. That is how a developer's backend,
+// auth-core `BridgeManagement` and the CLI create tokens.
+//
+// The test-data API mints that app key for the e2e app's domain — the same call
+// bridge-nestjs's e2e and bridge-api's own e2e global-setup use. Like any API
+// key it carries only the privileges it was minted with; creating tokens needs
+// TOKEN_WRITE. The playwright test-data key (`x-playwright-api-key`) is a
+// different credential and is only accepted by the test-data routes.
+// ---------------------------------------------------------------------------
+
+async function generateAppApiKey(config: EnvironmentConfig): Promise<string> {
+  const res = await fetch(`${config.testDataApiUrl}/account/test/playwright/generate-jwt`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-playwright-api-key': config.testDataApiKey,
+    },
+    body: JSON.stringify({ appDomain: config.appDomain, privileges: ['TOKEN_WRITE'] }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to generate the app API key for ${config.appDomain} (${res.status}): ${body}`);
+  }
+
+  const data = (await res.json()) as { token?: string };
+  if (!data.token) throw new Error(`generate-jwt returned no token for ${config.appDomain}`);
+  return data.token;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: create an API token via the bridge-api, as the app
 // ---------------------------------------------------------------------------
 
 async function createApiToken(
   testDataApiUrl: string,
-  bearerToken: string,
+  appApiKey: string,
   privileges: string[],
 ): Promise<string> {
-  // Minting an API token requires authenticating as an OWNER/ADMIN of the app —
-  // exactly how a developer creates one via the Bridge API. We use the owner
-  // user's access token (Authorization: Bearer), which beforeAll already minted.
   const res = await fetch(`${testDataApiUrl}/account/api-token/app`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${bearerToken}`,
+      'x-api-key': appApiKey,
     },
     body: JSON.stringify({ name: `E2E test token ${Date.now()}`, privileges }),
   });
@@ -109,17 +143,13 @@ describe('API token authentication (E2E)', () => {
     testDataClient = new TestDataClient(config);
     authClient = new AuthClient(config.authBaseUrl, config.appId);
 
-    // Create a test user and get a user JWT. A freshly created account owns its
-    // own tenant (role OWNER), which authorizes it to mint API tokens for the app.
+    // A test user's JWT — only for the "user JWT is not an API token" case.
     account = await testDataClient.createTestAccount();
     userAccessToken = (await authClient.getToken(account.email, account.password)).accessToken;
 
-    // Mint an API token via bridge-api, authenticating as the owner (Bearer JWT).
-    apiTokenWithPrivilege = await createApiToken(
-      config.testDataApiUrl,
-      userAccessToken,
-      ['TENANT_WRITE'],
-    );
+    // Mint an API token via bridge-api, as the app (its API key).
+    const appApiKey = await generateAppApiKey(config);
+    apiTokenWithPrivilege = await createApiToken(config.testDataApiUrl, appApiKey, ['TENANT_WRITE']);
 
     request = supertest(buildApiTokenApp(config));
   });
@@ -161,10 +191,6 @@ describe('API token authentication (E2E)', () => {
 
 describe('Privilege enforcement (E2E)', () => {
   let request: supertest.Agent;
-  let testDataClient: TestDataClient;
-  let authClient: AuthClient;
-  let account: PlaywrightTestAccount;
-  let userAccessToken: string;
   let tokenWithPrivilege: string;
   let tokenMissingPrivilege: string;
   let tokenEmptyPrivileges: string;
@@ -172,29 +198,12 @@ describe('Privilege enforcement (E2E)', () => {
   const config = getEnvironmentConfig();
 
   beforeAll(async () => {
-    testDataClient = new TestDataClient(config);
-    authClient = new AuthClient(config.authBaseUrl, config.appId);
-
-    account = await testDataClient.createTestAccount();
-    userAccessToken = (await authClient.getToken(account.email, account.password)).accessToken;
-
-    tokenWithPrivilege = await createApiToken(
-      config.testDataApiUrl,
-      userAccessToken,
-      ['TENANT_WRITE'],
-    );
-    tokenMissingPrivilege = await createApiToken(
-      config.testDataApiUrl,
-      userAccessToken,
-      ['TENANT_READ'],
-    );
-    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, userAccessToken, []);
+    const appApiKey = await generateAppApiKey(config);
+    tokenWithPrivilege = await createApiToken(config.testDataApiUrl, appApiKey, ['TENANT_WRITE']);
+    tokenMissingPrivilege = await createApiToken(config.testDataApiUrl, appApiKey, ['TENANT_READ']);
+    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, appApiKey, []);
 
     request = supertest(buildApiTokenApp(config));
-  });
-
-  afterAll(async () => {
-    await testDataClient.removeTestAccount(account.email).catch(() => {});
   });
 
   it('POST /api-token-test/privileged with token carrying TENANT_WRITE → 200', async () => {
