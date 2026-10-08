@@ -1,31 +1,17 @@
-# Changelog — @nebulr-group/bridge-express
+# Changelog
 
-## Unreleased (0.7.0)
+## [0.6.0] - 2026-09-30
 
-### Added — plan limits as middleware (TBP-745)
+### Added
 
-The express twin of bridge-nestjs 0.8.0 `@RequireQuota` / `@SyncQuota` / `@RequireEntitlement`: the same REST calls, the same refusal bodies, the same workspace-scoped hashed idempotency key (TBP-738).
+- **Plan limits with one middleware.** Add one middleware to a route and it refuses the request once the workspace reaches its plan limit, with the same response the Bridge frontend packages already understand, and records the usage after the request succeeds. Previously you had to check and report usage by hand.
+- **A feature that is off says why.** When a flag keeps a route closed, the refusal now says whether the feature is not on the workspace's plan, not allowed for this user, or switched off, so your frontend can open the upgrade dialog, tell the user to ask an admin, or simply hide it.
 
-- `bridge.requireQuota(metric, { current? })` refuses with `402 QUOTA_EXCEEDED` (`{ statusCode, code, message, metric, used, limit, fix }`) at the plan's limit and records usage only after a 2xx. Counter mode (no `current`) reports one event keyed by the request's `Idempotency-Key`; gauge mode (`current`) compares your count and sets the gauge. A `metered` quota never refuses; a quota that cannot be read answers `503` (fail-closed).
-- `bridge.syncQuota(metric, { current })` sets a gauge to your count after a 2xx, for deletes and bulk operations.
-- `bridge.requireEntitlement(key)` refuses with `403 ENTITLEMENT_REQUIRED` (`{ statusCode, code, message, entitlement, fix }`). The documented exception to "every gate is a flag"; outside production it logs a one-time note.
-- `bridge.quota` (`BridgeQuotaService`): `check`, `assertQuota`, `record`, `sync`, `assertEntitlement` as plain calls. Refusals are thrown as `BridgeRefusalError` (`QuotaExceededError`, `EntitlementRequiredError`) with `status` and `body`.
-- `bridge.fromRequest(req)`: the tenant view for the user the auth middleware verified on the request. Only a token `bridge.auth()` / `bridge.protect()` verified counts — never a header or `req.bridgeAccessToken`.
-- `tenant.usage`: `quota(metric)`, `report(metric, n, key)`, `set(metric, count)`.
-- Outside production, a counting response carries `X-Bridge-Usage-Counted: <metric>` so bridge-svelte can warn when the page counts the same metric too.
-- `createBridge()` with no arguments boots from `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG`. Explicit options win over the environment, including `debug: false`.
+### Changed
 
-### BREAKING — every gate is a flag
+- **Auth core 0.8.** This version is built and tested against `@nebulr-group/bridge-auth-core` 0.8.
+- **Shorter guides.** The integration guides now describe only the decisions you make, and a new page explains how plan limits, upgrades and customization work.
 
-Mirrors bridge-nestjs 0.8.0 (TBP-705). A person is gated by a flag whose rule says why; an app no longer compares a role, a privilege list, a plan or an entitlement itself. Each removed option now fails **at startup** with a message naming the flag setup to use — never silently ignored, which would open the route.
+### Fixed
 
-| Removed | Use instead |
-|---|---|
-| `bridge.protect({ role: 'ADMIN' })` | `bridge.protect({ featureFlag: 'admin-panel' })`, flag rule `privileges contains "USER_WRITE"` (or whatever decides it) |
-| `bridge.protect({ plans: ['pro'] })` and route-rule `plans` | `featureFlag: '<feature>'`, flag rule `bridge:billing.entitlement.<feature> eq true`, feature listed on the plans that sell it (`bridge plan feature add pro <feature>`) |
-| `bridge.protect({ entitlement \| entitlements })` and route-rule `entitlement` / `entitlements` | `featureFlag: '<key>'`, flag rule `bridge:billing.entitlement.<key> eq true` (a flag that is off for a plan reason answers `402 FEATURE_NOT_IN_PLAN`) — or `bridge.requireEntitlement('<key>')` if you explicitly want no flag |
-| Route-rule `privilege: 'USER_READ'` (any value other than `'ANONYMOUS'` / `'AUTHENTICATED'`) | `privilege: 'AUTHENTICATED', featureFlag: '<flag>'`, flag rule `privileges contains "USER_READ"`. For API-token callers: `bridge.protect({ privilege: 'USER_READ' })` (API tokens only, unchanged) |
-
-Also gone: the `402 { error: 'Payment required', reason: 'plan_required' \| 'entitlement_missing' \| 'billing_locked' }` body those options answered with. A frontend reading it should read `code` (`FEATURE_NOT_IN_PLAN`, `QUOTA_EXCEEDED`) instead, which is what the Bridge frontend plugins already do.
-
-`RoutePrivilege` is now `'ANONYMOUS' | 'AUTHENTICATED'`, and `BridgeMiddlewareOptions` has `privilege`, `acceptAuth` and `featureFlag` only. Run `npx @nebulr-group/bridge-cli check gates` to list every direct check left in the app.
+- **Documentation links.** Three documentation pages linked to addresses with no page behind them; they now resolve.
