@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express"><img src="https://raw.githubusercontent.com/thebridgedev/bridge-express/main/.github/assets/banner.png" alt="The Bridge for Express" width="100%"></a>
+  <a href="https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express"><img src="https://raw.githubusercontent.com/thebridgedev/bridge-express/main/.github/assets/banner.png" alt="The Bridge for Express" width="100%"></a>
 </p>
 
 <p align="center">
@@ -8,17 +8,17 @@
 </p>
 
 <p align="center">
-  <a href="https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express"><b>Website</b></a> ·
-  <a href="https://thebridge.dev/docs/quickstart/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express"><b>Quickstart</b></a> ·
-  <a href="https://thebridge.dev/docs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express"><b>Docs</b></a> ·
-  <a href="https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express"><b>Set up with your AI assistant</b></a>
+  <a href="https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express"><b>Website</b></a> ·
+  <a href="https://thebridge.dev/docs/quickstart/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express"><b>Quickstart</b></a> ·
+  <a href="https://thebridge.dev/docs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express"><b>Docs</b></a> ·
+  <a href="https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express"><b>Set up with your AI assistant</b></a>
 </p>
 
 # The Bridge for Express
 
 `@nebulr-group/bridge-express` protects an Express API with Bridge: token verification, flag-gated routes, plan limits and tenant data, as middleware.
 
-**[The Bridge](https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)** is a hosted backend for SaaS apps. It gives you sign-in (passwords, magic links, passkeys, social login and SSO), multi-tenant workspaces with roles, Stripe subscriptions with plan limits, and feature flags, all managed from one dashboard. Your AI coding assistant can set it up for you through the [Bridge MCP server](https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express).
+**[The Bridge](https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)** is a hosted backend for SaaS apps. It gives you sign-in (passwords, magic links, passkeys, social login and SSO), multi-tenant workspaces with roles, Stripe subscriptions with plan limits, and feature flags, all managed from one dashboard. Your AI coding assistant can set it up for you through the [Bridge MCP server](https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express).
 
 Provides JWT verification (JWKS), API-token verification, flag-gated routes, plan limits (`402 QUOTA_EXCEEDED`), tenant data and HTTP token-forwarding — without any NestJS dependency.
 
@@ -197,16 +197,20 @@ app.get('/forward/items', async (req, res) => {
 
 Available methods: `get`, `post`, `put`, `patch`, `delete`. Throws `BridgeHttpError` (with `.status` and `.url`) on non-2xx responses.
 
+## Working on this repository
+
+The middleware lives in `bridge-express/`, a demo app in `demo/` and the guides in [`learning/`](learning/README.md).
+
 ## Learn more
 
-- [Quickstart](https://thebridge.dev/docs/quickstart/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Authentication](https://thebridge.dev/docs/auth/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Feature flags](https://thebridge.dev/docs/feature-flags/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Plan limits](https://thebridge.dev/docs/plan-limits/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Tenant data](https://thebridge.dev/docs/bridge-service/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Multi-tenancy](https://thebridge.dev/docs/multi-tenancy/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Error handling](https://thebridge.dev/docs/error-handling/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
-- [Examples](https://thebridge.dev/docs/examples/express/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express)
+- [Quickstart](https://thebridge.dev/docs/quickstart/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Authentication](https://thebridge.dev/docs/auth/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Feature flags](https://thebridge.dev/docs/feature-flags/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Plan limits](https://thebridge.dev/docs/plan-limits/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Tenant data](https://thebridge.dev/docs/bridge-service/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Multi-tenancy](https://thebridge.dev/docs/multi-tenancy/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Error handling](https://thebridge.dev/docs/error-handling/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
+- [Examples](https://thebridge.dev/docs/examples/express/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express)
 
 ## Other Bridge packages
 
@@ -222,4 +226,4 @@ Available methods: `get`, `post`, `put`, `patch`, `delete`. Throws `BridgeHttpEr
 
 ## License
 
-[MIT](https://github.com/thebridgedev/bridge-express/blob/main/LICENSE) © Nebulr. Built by [The Bridge](https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-express).
+[MIT](https://github.com/thebridgedev/bridge-express/blob/main/LICENSE) © Nebulr. Built by [The Bridge](https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-express).

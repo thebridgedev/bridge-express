@@ -1,7 +1,7 @@
 {
   "name": "@nebulr-group/bridge-express",
   "version": "0.6.0",
-  "description": "Bridge authentication and authorization middleware for Express.js",
+  "description": "The Bridge for Express: token verification, flag-gated routes, plan limits and tenant data as middleware.",
   "author": "Nebulr Group",
   "license": "MIT",
   "main": "dist/index.js",
@@ -37,18 +37,31 @@
   },
   "keywords": [
     "express",
-    "bridge",
-    "nebulr",
-    "auth",
-    "authentication",
+    "expressjs",
+    "middleware",
     "jwt",
+    "api-tokens",
+    "the-bridge",
+    "bridge",
+    "authentication",
+    "auth",
+    "login",
+    "sso",
     "feature-flags",
+    "stripe",
+    "subscriptions",
+    "billing",
+    "plan-limits",
+    "multi-tenant",
     "rbac",
-    "middleware"
+    "saas"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thebridgedev/bridge-express.git"
   },
-  "homepage": "https://thebridge.dev"
+  "homepage": "https://thebridge.dev/docs/quickstart/express/",
+  "bugs": {
+    "url": "https://github.com/thebridgedev/bridge-express/issues"
+  }
 }
