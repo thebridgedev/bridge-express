@@ -8,6 +8,7 @@
     "demo"
   ],
   "scripts": {
+    "check:docs-links": "node scripts/check-docs-links.mjs",
     "build": "npm run build --workspace=bridge-express",
     "build:demo": "npm run build --workspace=demo",
     "start:demo": "npm run start:dev --workspace=demo",
